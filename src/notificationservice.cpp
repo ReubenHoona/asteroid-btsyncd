@@ -20,6 +20,7 @@
 #include "common.h"
 
 #include <MDConfItem>
+#include <QDateTime>
 #include <QDBusInterface>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
@@ -33,13 +34,15 @@ static QString actionLabel(const QString &key)
     if(key == "mute")   return QObject::tr("Mute app");
     if(key == "answer") return QObject::tr("Answer");
     if(key == "reject") return QObject::tr("Decline");
+    if(key == "silence") return QObject::tr("Silence");
+    if(key == "end")    return QObject::tr("End call");
     return key;
 }
 
 // What this watch understands, for the capabilities characteristic
 static const char CAPABILITIES[] =
-    "<capabilities><version>1</version>"
-    "<actions>dismiss,reply,open,mute,answer,reject</actions>"
+    "<capabilities><version>2</version>"
+    "<actions>dismiss,reply,open,mute,answer,reject,silence,end</actions>"
     "<replies>1</replies></capabilities>";
 
 static int optionMtu(const QVariantMap &options)
@@ -101,6 +104,17 @@ public slots:
 
                 hints.insert("urgency", 3);
 
+                // A ringing call keeps its arrival time through updates (e.g.
+                // silencing it): lipstick would stamp an update as new and
+                // move it to the top of the notifications
+                const bool isCall = phoneActions.contains("answer") || phoneActions.contains("reject");
+                if(isCall) {
+                    QString timestamp = mService->callTimestamp(replacesId);
+                    if(timestamp.isEmpty())
+                        timestamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+                    hints.insert("x-nemo-timestamp", timestamp);
+                }
+
                 // Freedesktop actions: identifier, label pairs. The launcher
                 // shows them as buttons; lipstick reports a press through
                 // ActionInvoked.
@@ -132,9 +146,17 @@ public slots:
                     fprintf(stderr, "NotificationsUpdateChrc::writeValue: D-Bus Error: %s\n", reply.errorMessage().toStdString().c_str());
                 }
 
+                uint lipstickId = replacesId;
                 if(!replacesId) {
-                    if(reply.arguments().size() > 0)
-                        mService->mKnownAndroidNotifs.insert(id, reply.arguments()[0].toUInt());
+                    if(reply.arguments().size() > 0) {
+                        lipstickId = reply.arguments()[0].toUInt();
+                        mService->mKnownAndroidNotifs.insert(id, lipstickId);
+                    }
+                }
+                if(lipstickId) {
+                    argumentList[1] = lipstickId;
+                    mService->remember(lipstickId, phoneActions,
+                                       isCall ? argumentList : QList<QVariant>());
                 }
             } else
                 mReader.clear();
@@ -149,6 +171,7 @@ public slots:
                     // Closing it here gives NotificationClosed with reason
                     // CloseNotificationCalled: not reported back as a dismiss
                     mService->mKnownAndroidNotifs.remove(id);
+                    mService->forget(replacesId);
 
                     QList<QVariant> argumentList;
                     argumentList << replacesId;
@@ -276,6 +299,11 @@ bool NotificationsDBusApi::Reply(uint notificationId, const QString &text)
     return mService->reply(notificationId, text);
 }
 
+bool NotificationsDBusApi::Silence(uint notificationId)
+{
+    return mService->silence(notificationId);
+}
+
 NotificationService::NotificationService(int index, QDBusConnection bus, QObject *parent) : Service(bus, index, NOTIF_UUID, parent)
 {
     mFeedback = new NotificationsFeedbackChrc(bus, 1, this);
@@ -327,9 +355,57 @@ bool NotificationService::reply(uint notificationId, const QString &text)
     // Done with it on the watch; the phone updates or removes its own
     mActioned.insert(notificationId);
     mKnownAndroidNotifs.remove(id);
+    forget(notificationId);
     static QDBusInterface notifyApp(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE, NOTIFICATIONS_MAIN_IFACE);
     notifyApp.call(QDBus::NoBlock, "CloseNotification", notificationId);
     return true;
+}
+
+bool NotificationService::silence(uint notificationId)
+{
+    int id = mKnownAndroidNotifs.key(notificationId, 0);
+    if(!id)
+        return false;
+
+    if(mPhoneActions.value(notificationId).contains("silence"))
+        sendFeedback(id, "silence");
+
+    // Update the notification to suppress its feedback: lipstick then stops
+    // the ringtone vibration. An update shows no new preview.
+    if(mCallNotify.contains(notificationId)) {
+        QList<QVariant> args = mCallNotify.value(notificationId);
+        QVariantMap hints = args[6].toMap();
+        hints.insert("x-nemo-feedback-suppressed", true);
+        args[6] = hints;
+        mCallNotify.insert(notificationId, args);
+
+        static QDBusInterface notifyApp(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE, NOTIFICATIONS_MAIN_IFACE);
+        notifyApp.callWithArgumentList(QDBus::NoBlock, "Notify", args);
+    }
+    return true;
+}
+
+void NotificationService::remember(uint notificationId, const QStringList &phoneActions,
+                                   const QList<QVariant> &callNotify)
+{
+    mPhoneActions.insert(notificationId, phoneActions);
+    if(callNotify.isEmpty())
+        mCallNotify.remove(notificationId);
+    else
+        mCallNotify.insert(notificationId, callNotify);
+}
+
+void NotificationService::forget(uint notificationId)
+{
+    mPhoneActions.remove(notificationId);
+    mCallNotify.remove(notificationId);
+}
+
+QString NotificationService::callTimestamp(uint notificationId) const
+{
+    if(!notificationId || !mCallNotify.contains(notificationId))
+        return QString();
+    return mCallNotify.value(notificationId)[6].toMap().value("x-nemo-timestamp").toString();
 }
 
 void NotificationService::ActionInvoked(uint replacesId, const QString &actionKey)
@@ -352,4 +428,5 @@ void NotificationService::NotificationClosed(uint replacesId, uint reason)
         mKnownAndroidNotifs.remove(id);
     }
     mActioned.remove(replacesId);
+    forget(replacesId);
 }

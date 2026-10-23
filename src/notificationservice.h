@@ -70,6 +70,12 @@ public:
 
 public slots:
     bool Reply(uint notificationId, const QString &text);
+    /*
+     * Silences a ringing call (by lipstick id): the watch stops vibrating,
+     * and the phone silences its ringer when it offered "silence". The call
+     * keeps ringing until answered, declined or ended.
+     */
+    bool Silence(uint notificationId);
 
 private:
     NotificationService *mService;
@@ -86,6 +92,14 @@ public:
 
     void setMtu(int mtu);
     bool reply(uint notificationId, const QString &text);
+    bool silence(uint notificationId);
+
+    // What the phone offered for a notification (by lipstick id), and for a
+    // call the Notify arguments it was shown with (to update it)
+    void remember(uint notificationId, const QStringList &phoneActions,
+                  const QList<QVariant> &callNotify);
+    void forget(uint notificationId);
+    QString callTimestamp(uint notificationId) const;
 
 private slots:
     void NotificationClosed(uint replacesId, uint reason);
@@ -99,6 +113,8 @@ private:
     // phone: lipstick removes a notification after any action, and that close
     // must not reach the phone as a dismiss.
     QSet<uint> mActioned;
+    QHash<uint, QStringList> mPhoneActions;
+    QHash<uint, QList<QVariant>> mCallNotify;
     int mMtu = 23;
 };
 
