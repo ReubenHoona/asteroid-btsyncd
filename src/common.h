@@ -40,6 +40,8 @@
 #define NOTIFICATIONS_MAIN_IFACE     "org.freedesktop.Notifications"
 #define NOTIFICATIONS_PATH_BASE      "/org/freedesktop/Notifications"
 
+#define BTSYNCD_NOTIF_PATH           "/org/asteroidos/btsyncd/notifications"
+#define BTSYNCD_NOTIF_IFACE          "org.asteroidos.btsyncd.Notifications"
 #define SCREENSHOT_SERVICE_NAME      "org.nemomobile.lipstick"
 #define SCREENSHOT_MAIN_IFACE        "org.nemomobile.lipstick"
 #define SCREENSHOT_PATH_BASE         "/org/nemomobile/lipstick/screenshot"
@@ -57,6 +59,8 @@
 #define NOTIF_UUID        "00009071-0000-0000-0000-00A57E401D05"
 #define NOTI_UPD_UUID     "00009001-0000-0000-0000-00A57E401D05"
 #define NOTI_FDB_UUID     "00009002-0000-0000-0000-00A57E401D05"
+#define NOTI_RPL_UUID     "00009003-0000-0000-0000-00A57E401D05"
+#define NOTI_CAP_UUID     "00009004-0000-0000-0000-00A57E401D05"
 
 #define WEATHER_UUID      "00008071-0000-0000-0000-00A57E401D05"
 #define WEAT_CITY_UUID    "00008001-0000-0000-0000-00A57E401D05"
