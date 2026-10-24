@@ -130,7 +130,7 @@ void ANCS::NotificationCharacteristicPropertiesChanged(QString /* interfaceName 
 {
     if (changedProperties.contains("Value")) {
         QVariant value = changedProperties["Value"];
-        if (value.type() == QVariant::ByteArray) {
+        if (value.typeId() == QMetaType::QByteArray) {
             QByteArray bytes = value.toByteArray();
             if (bytes.length() == 8) {
                 unsigned int eventId = decodeNumber(bytes, 0, 1);
@@ -199,7 +199,7 @@ void ANCS::DataCharacteristicPropertiesChanged(QString /* interfaceName */,
 {
     if (changedProperties.contains("Value")) {
         QVariant value = changedProperties["Value"];
-        if (value.type() == QVariant::ByteArray) {
+        if (value.typeId() == QMetaType::QByteArray) {
             QByteArray bytes = value.toByteArray();
             if (bytes.length() < 1) {
                 qDebug() << "Malformed message, length < 0, ignoring";

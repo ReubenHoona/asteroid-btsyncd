@@ -51,7 +51,7 @@ void CTS::searchForTimeCharacteristics() {
         QDBusMessage response = timeCharacteristicIface.call("ReadValue", empty);
         QList<QVariant> arguments = response.arguments();
 
-        if(!arguments.isEmpty() && arguments.first().type() == QVariant::ByteArray) {
+        if(!arguments.isEmpty() && arguments.first().typeId() == QMetaType::QByteArray) {
             QByteArray bytes = arguments.first().toByteArray();
             parseCurrentTime(bytes);
         }
@@ -84,7 +84,7 @@ void CTS::TimeCharacteristicPropertiesChanged(QString /* interfaceName */,
 {
     if (changedProperties.contains("Value")) {
         QVariant value = changedProperties["Value"];
-        if (value.type() == QVariant::ByteArray) {
+        if (value.typeId() == QMetaType::QByteArray) {
 
             QByteArray bytes = value.toByteArray();
             parseCurrentTime(bytes);
