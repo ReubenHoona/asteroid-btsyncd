@@ -25,6 +25,11 @@ pkg_check_modules(MLITE mlite6 REQUIRED IMPORTED_TARGET)
 
 add_subdirectory(src)
 
+option(BTSYNCD_TESTS "Build the health records tests" OFF)
+if(BTSYNCD_TESTS)
+	add_subdirectory(tests)
+endif()
+
 build_translations(i18n)
 
 feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES)

@@ -18,6 +18,8 @@ set(
 	ancs.cpp
 	ancs_notification.cpp
 	cts.cpp
+	healthrecords.cpp
+	healthservice.cpp
 )
 set(
 	HEADERS
@@ -40,6 +42,8 @@ set(
 	ancs.h
 	ancs_notification.h
 	cts.h
+	healthrecords.h
+	healthservice.h
 )
 
 add_executable(asteroid-btsyncd ${SRC} ${HEADERS})
