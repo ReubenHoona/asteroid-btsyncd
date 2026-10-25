@@ -23,6 +23,8 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QDBusArgument>
+#include <QDBusMessage>
+#include <QDBusVariant>
 #include <QDebug>
 #include <QTimer>
 
@@ -42,6 +44,12 @@ BlueZManager::BlueZManager(QDBusObjectPath appPath, QDBusObjectPath advertPath, 
     connect(this, SIGNAL(adapterChanged()), this, SLOT(onAdapterChanged()));
     connect(this, SIGNAL(connectedChanged()), this, SLOT(onConnectedChanged()));
     connect(this, SIGNAL(servicesResolvedChanged()), this, SLOT(onServicesResolvedChanged()));
+
+    // BTSYNCD_ADVERT_CHECK_MS: a shorter period, for tests
+    const int checkMs = qEnvironmentVariableIntValue("BTSYNCD_ADVERT_CHECK_MS");
+    mAdvertCheck.setInterval(checkMs > 0 ? checkMs : 60000);
+    connect(&mAdvertCheck, &QTimer::timeout, this, &BlueZManager::checkAdvertising);
+    mAdvertCheck.start();
 
     QDBusInterface remoteOm(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, mBus);
     if(remoteOm.isValid())
@@ -63,13 +71,20 @@ void BlueZManager::serviceRegistered(const QString& name)
 void BlueZManager::serviceUnregistered(const QString& name)
 {
     qDebug() << "Service" << name << "is not running";
-    setAdapter("adapter");
+    // No adapter until bluetoothd is back; then it is a new adapter and
+    // gets the GATT application and the advertisement registered again
+    setAdapter("");
+    mPowered = false;
     mConnectedDevice = "";
     setConnected(false);
 }
 
-void BlueZManager::InterfacesAdded(QDBusObjectPath, InterfaceList)
+void BlueZManager::InterfacesAdded(QDBusObjectPath path, InterfaceList interfaces)
 {
+    if (interfaces.contains(ADAPTER_IFACE) || interfaces.contains(GATT_MANAGER_IFACE)) {
+        qInfo() << "Adapter" << path.path() << "appeared";
+        mRegisterAll = true;
+    }
     updateAdapter();
 }
 
@@ -82,6 +97,7 @@ void BlueZManager::updateAdapter() {
     QString adapter = "";
     bool connected = false;
     bool servicesResolved = false;
+    bool powered = false;
 
     QDBusInterface remoteOm(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, mBus);
     QDBusMessage result = remoteOm.call("GetManagedObjects");
@@ -97,8 +113,10 @@ void BlueZManager::updateAdapter() {
             argument >> key >> value;
             argument.endMapEntry();
 
-            if (value.contains(GATT_MANAGER_IFACE) && value.contains(LE_ADVERTISING_MANAGER_IFACE))
+            if (value.contains(GATT_MANAGER_IFACE) && value.contains(LE_ADVERTISING_MANAGER_IFACE)) {
                 adapter = key;
+                powered = value.value(ADAPTER_IFACE).value("Powered").toBool();
+            }
 
             if (value.contains(DEVICE_MANAGER_IFACE)) {
                  mBus.connect(BLUEZ_SERVICE_NAME, key, DBUS_PROPERTIES_IFACE, "PropertiesChanged", this, SLOT(PropertiesChanged(QString, QMap<QString, QVariant>, QStringList)));
@@ -118,7 +136,25 @@ void BlueZManager::updateAdapter() {
         argument.endMap();
     }
 
+    // A new adapter path registers everything (onAdapterChanged)
+    const bool newAdapter = adapter != mAdapter;
+    if (!adapter.isEmpty())
+        mBus.connect(BLUEZ_SERVICE_NAME, adapter, DBUS_PROPERTIES_IFACE, "PropertiesChanged", this, SLOT(PropertiesChanged(QString, QMap<QString, QVariant>, QStringList)));
     setAdapter(adapter);
+    if (!adapter.isEmpty() && !newAdapter) {
+        if (mRegisterAll) {
+            // The same path, but a new adapter object (controller reset,
+            // hci0 removed and added): our registrations went with the old one
+            qInfo() << "Adapter" << adapter << "is back: registering the GATT application and the advertisement again";
+            registerAll();
+        } else if (powered && !mPowered) {
+            reRegisterAdvertisement(QStringLiteral("adapter powered on"));
+        }
+    }
+    mRegisterAll = false;
+    if (powered != mPowered)
+        qInfo() << "Adapter" << adapter << (powered ? "powered on" : "powered off");
+    mPowered = powered;
     setConnected(connected);
     setServicesResolved(servicesResolved);
 }
@@ -152,12 +188,20 @@ void BlueZManager::onAdapterChanged()
     if(mAdapter != "")
     {
         qDebug() << "BLE Adapter" << mAdapter << "found";
+        registerAll();
+    }
+    else
+        qDebug() << "No BLE adapter found";
+}
 
+void BlueZManager::registerAll()
+{
+    {
         // Don't fire-and-forget: a failed RegisterApplication/RegisterAdvertisement
         // (adapter not ready, AlreadyExists after a partial restart, ...) would
         // otherwise leave the daemon silently running with no GATT or advertising.
-        // Watch each reply and log errors; updateAdapter() retries on the next
-        // adapter PropertiesChanged.
+        // Watch each reply and log errors; a power cycle of the adapter or the
+        // periodic check registers the advertisement again.
         QDBusInterface serviceManager(BLUEZ_SERVICE_NAME, mAdapter, GATT_MANAGER_IFACE, mBus);
         QDBusPendingCall appCall = serviceManager.asyncCall("RegisterApplication", QVariant::fromValue(mAppPath), QVariantMap());
         QDBusPendingCallWatcher *appWatcher = new QDBusPendingCallWatcher(appCall, this);
@@ -169,21 +213,65 @@ void BlueZManager::onAdapterChanged()
                 qDebug() << "Service" << mAppPath.path() << "registered";
             w->deleteLater();
         });
-
-        QDBusInterface adManager(BLUEZ_SERVICE_NAME, mAdapter, LE_ADVERTISING_MANAGER_IFACE, mBus);
-        QDBusPendingCall advCall = adManager.asyncCall("RegisterAdvertisement", QVariant::fromValue(mAdvertPath), QVariantMap());
-        QDBusPendingCallWatcher *advWatcher = new QDBusPendingCallWatcher(advCall, this);
-        connect(advWatcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) {
-            QDBusPendingReply<> reply = *w;
-            if (reply.isError())
-                qWarning() << "RegisterAdvertisement failed:" << reply.error().message();
-            else
-                qDebug() << "Advertisement" << mAdvertPath.path() << "registered";
-            w->deleteLater();
-        });
     }
-    else
-        qDebug() << "No BLE adapter found";
+    registerAdvertisement();
+}
+
+void BlueZManager::registerAdvertisement()
+{
+    QDBusInterface adManager(BLUEZ_SERVICE_NAME, mAdapter, LE_ADVERTISING_MANAGER_IFACE, mBus);
+    QDBusPendingCall advCall = adManager.asyncCall("RegisterAdvertisement", QVariant::fromValue(mAdvertPath), QVariantMap());
+    QDBusPendingCallWatcher *advWatcher = new QDBusPendingCallWatcher(advCall, this);
+    connect(advWatcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) {
+        QDBusPendingReply<> reply = *w;
+        if (reply.isError())
+            qWarning() << "RegisterAdvertisement failed:" << reply.error().message();
+        else
+            qInfo() << "Advertisement" << mAdvertPath.path() << "registered";
+        mReRegistering = false;
+        w->deleteLater();
+    });
+}
+
+void BlueZManager::reRegisterAdvertisement(const QString &reason)
+{
+    if (mAdapter.isEmpty() || mReRegistering)
+        return;
+    mReRegistering = true;
+    qInfo() << "Registering the advertisement again:" << reason;
+    QDBusInterface adManager(BLUEZ_SERVICE_NAME, mAdapter, LE_ADVERTISING_MANAGER_IFACE, mBus);
+    QDBusPendingCall call = adManager.asyncCall("UnregisterAdvertisement", QVariant::fromValue(mAdvertPath));
+    QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(call, this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) {
+        QDBusPendingReply<> reply = *w;
+        if (reply.isError())
+            qDebug() << "UnregisterAdvertisement:" << reply.error().message() << "(ignored)";
+        w->deleteLater();
+        if (mAdapter.isEmpty()) {
+            mReRegistering = false;
+            return;
+        }
+        registerAdvertisement();
+    });
+}
+
+void BlueZManager::checkAdvertising()
+{
+    if (mAdapter.isEmpty() || !mPowered || mConnected || mReRegistering)
+        return;
+    QDBusMessage get = QDBusMessage::createMethodCall(BLUEZ_SERVICE_NAME, mAdapter, DBUS_PROPERTIES_IFACE, "Get");
+    get << QString(LE_ADVERTISING_MANAGER_IFACE) << QString("ActiveInstances");
+    QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(mBus.asyncCall(get), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) {
+        QDBusPendingReply<QDBusVariant> reply = *w;
+        w->deleteLater();
+        if (reply.isError() || mConnected)
+            return;
+        bool ok = false;
+        const uint active = reply.value().variant().toUInt(&ok);
+        if (ok && active == 0)
+            reRegisterAdvertisement(QStringLiteral("BlueZ has no active advertisement"));
+    });
 }
 
 void BlueZManager::PropertiesChanged(QString, QMap<QString, QVariant>, QStringList)

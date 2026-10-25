@@ -87,5 +87,5 @@ bool Advertisement::getDiscoverable()
 /* Exposed slots */
 void Advertisement::Release()
 {
-    fprintf(stderr, "%s: Released!", mPath.toStdString().c_str());
+    fprintf(stderr, "%s: Released!\n", mPath.toStdString().c_str());
 }

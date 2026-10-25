@@ -22,6 +22,7 @@
 #define SERVICE_NAME                 "org.asteroidos.btsyncd"
 
 #define BLUEZ_SERVICE_NAME           "org.bluez"
+#define ADAPTER_IFACE                "org.bluez.Adapter1"
 #define GATT_MANAGER_IFACE           "org.bluez.GattManager1"
 #define DEVICE_MANAGER_IFACE         "org.bluez.Device1"
 #define DBUS_OM_IFACE                "org.freedesktop.DBus.ObjectManager"

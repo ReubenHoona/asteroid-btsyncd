@@ -22,6 +22,7 @@
 #include <QDBusObjectPath>
 #include <QDBusServiceWatcher>
 #include <QDBusConnection>
+#include <QTimer>
 
 #include "ancs.h"
 #include "cts.h"
@@ -44,10 +45,30 @@ private:
     ANCS mAncs;
     CTS mCts;
 
+    // The adapter's Powered property: after a power cycle BlueZ still lists
+    // the advertisement, but the controller no longer sends it
+    bool mPowered = false;
+    // An adapter object appeared (again): register everything even when its
+    // path is the one we had
+    bool mRegisterAll = false;
+    bool mReRegistering = false;
+    QTimer mAdvertCheck;
+
     void updateAdapter();
     void setAdapter(QString adatper);
     void setConnected(bool connected);
     void setServicesResolved(bool servicesResolved);
+    void registerAll();
+    void registerAdvertisement();
+
+public:
+    // Unregister the advertisement (errors ignored), then register it again
+    void reRegisterAdvertisement(const QString &reason);
+
+private slots:
+    // Every minute while no central is connected: re-register when BlueZ
+    // has no active advertisement although ours should be
+    void checkAdvertising();
 
 signals:
     void connectedChanged();
@@ -57,7 +78,7 @@ signals:
 public slots:
     void serviceRegistered(const QString& name);
     void serviceUnregistered(const QString& name);
-    void InterfacesAdded(QDBusObjectPath, InterfaceList);
+    void InterfacesAdded(QDBusObjectPath path, InterfaceList interfaces);
     void InterfacesRemoved(QDBusObjectPath, QStringList);
     void PropertiesChanged(QString, QMap<QString, QVariant>, QStringList);
 
