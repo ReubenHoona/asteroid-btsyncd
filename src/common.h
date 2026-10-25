@@ -42,6 +42,8 @@
 
 #define BTSYNCD_NOTIF_PATH           "/org/asteroidos/btsyncd/notifications"
 #define BTSYNCD_NOTIF_IFACE          "org.asteroidos.btsyncd.Notifications"
+#define BTSYNCD_VOICE_PATH           "/org/asteroidos/btsyncd/voice"
+#define BTSYNCD_VOICE_IFACE          "org.asteroidos.btsyncd.Voice"
 #define SCREENSHOT_SERVICE_NAME      "org.nemomobile.lipstick"
 #define SCREENSHOT_MAIN_IFACE        "org.nemomobile.lipstick"
 #define SCREENSHOT_PATH_BASE         "/org/nemomobile/lipstick/screenshot"
@@ -82,5 +84,11 @@
 #define HEALTH_REQ_UUID   "00004001-0000-0000-0000-00A57E401D05"
 #define HEALTH_DATA_UUID  "00004002-0000-0000-0000-00A57E401D05"
 #define HEALTH_CAP_UUID   "00004003-0000-0000-0000-00A57E401D05"
+
+#define VOICE_UUID        "0000A071-0000-0000-0000-00A57E401D05"
+#define VOICE_EVENT_UUID  "0000A001-0000-0000-0000-00A57E401D05"
+#define VOICE_AUDIO_UUID  "0000A002-0000-0000-0000-00A57E401D05"
+#define VOICE_RESULT_UUID "0000A003-0000-0000-0000-00A57E401D05"
+#define VOICE_CAP_UUID    "0000A004-0000-0000-0000-00A57E401D05"
 
 #endif // COMMON_H

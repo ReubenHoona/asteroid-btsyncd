@@ -20,6 +20,9 @@ set(
 	cts.cpp
 	healthrecords.cpp
 	healthservice.cpp
+	voiceprotocol.cpp
+	voiceservice.cpp
+	voicesource.cpp
 )
 set(
 	HEADERS
@@ -44,6 +47,9 @@ set(
 	cts.h
 	healthrecords.h
 	healthservice.h
+	voiceprotocol.h
+	voiceservice.h
+	voicesource.h
 )
 
 add_executable(asteroid-btsyncd ${SRC} ${HEADERS})
@@ -56,6 +62,12 @@ target_link_libraries(
 		PkgConfig::AmberMpris
 		PkgConfig::MLITE
 )
+
+# The microphone for voice replies (without it only WAV test sources work)
+if(PulseSimple_FOUND)
+	target_compile_definitions(asteroid-btsyncd PRIVATE BTSYNCD_HAVE_PULSE)
+	target_link_libraries(asteroid-btsyncd PRIVATE PkgConfig::PulseSimple)
+endif()
 
 install(
 	TARGETS asteroid-btsyncd

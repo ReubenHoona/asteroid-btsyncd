@@ -23,6 +23,7 @@
 #include "screenshotservice.h"
 #include "timeservice.h"
 #include "healthservice.h"
+#include "voiceservice.h"
 
 #include <QDBusMetaType>
 
@@ -30,13 +31,15 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
 {
     mPath = "/";
 
-    addService(new NotificationService(0, bus));
+    NotificationService *notifications = new NotificationService(0, bus);
+    addService(notifications);
     addService(new WeatherService(1, bus));
     addService(new MediaService(2, bus));
     addService(new BatteryService(3, bus));
     addService(new ScreenshotService(4, bus));
     addService(new TimeService(5, bus));
     addService(new HealthService(6, bus));
+    addService(new VoiceService(7, bus, notifications));
 
     qDBusRegisterMetaType<InterfaceList>();
     qDBusRegisterMetaType<ManagedObjectList>();
