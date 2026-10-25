@@ -26,6 +26,7 @@
 #include "service.h"
 
 class NotificationService;
+class QDBusServiceWatcher;
 
 /*
  * Watch to phone: what the user did with a notification, as XML in
@@ -87,8 +88,24 @@ class NotificationService : public Service
 public:
     explicit NotificationService(int index, QDBusConnection bus, QObject *parent = 0);
 
+    // Hints on every phone notification btsyncd posts: lipstick's owner
+    // (GetNotifications lists by it) and the phone's id
+    static constexpr const char *Owner = "asteroid-btsyncd";
+    static constexpr const char *OwnerHint = "x-nemo-owner";
+    static constexpr const char *PhoneIdHint = "x-asteroid-phone-id";
+
     // Phone notification id -> lipstick notification id
     QHash<int, uint> mKnownAndroidNotifs;
+
+    // Rebuilds mKnownAndroidNotifs (and the actions, call and timestamp
+    // memory) from the notifications lipstick shows for us, so the phone's
+    // updates and removals still find them after a btsyncd restart or a
+    // reboot. Closes duplicates of one phone notification.
+    void restoreKnown();
+
+    // When lipstick shows a notification as posted (ISO UTC), "" if unknown
+    QString timestamp(uint notificationId) const;
+    void setTimestamp(uint notificationId, const QString &timestamp);
 
     void setMtu(int mtu);
     bool reply(uint notificationId, const QString &text);
@@ -115,6 +132,8 @@ private:
     QSet<uint> mActioned;
     QHash<uint, QStringList> mPhoneActions;
     QHash<uint, QList<QVariant>> mCallNotify;
+    QHash<uint, QString> mTimestamps;
+    QDBusServiceWatcher *mLipstickWatcher = nullptr;
     int mMtu = 23;
 };
 

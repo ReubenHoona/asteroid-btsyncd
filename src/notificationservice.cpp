@@ -21,7 +21,11 @@
 
 #include <MDConfItem>
 #include <QDateTime>
+#include <QDBusArgument>
 #include <QDBusInterface>
+#include <QDBusMessage>
+#include <QDBusServiceWatcher>
+#include <QDebug>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 
@@ -63,6 +67,7 @@ public slots:
         uint replacesId;
         QString packageName, appName, appIcon, summary, body, vibrate = nullptr;
         QStringList phoneActions;
+        bool resync = false;
 
         mService->setMtu(optionMtu(options));
         mReader.addData(value);
@@ -79,6 +84,8 @@ public slots:
                     else if(mReader.name() == "vb") vibrate = mReader.readElementText();
                     else if(mReader.name() == "ac")
                         phoneActions = mReader.readElementText().split(',', Qt::SkipEmptyParts);
+                    else if(mReader.name() == "rs")
+                        resync = mReader.readElementText().trimmed() == "1";
                     else mReader.skipCurrentElement();
                 }
                 mReader.clear();
@@ -86,10 +93,29 @@ public slots:
                 replacesId = mService->mKnownAndroidNotifs.value(id, 0);
 
                 QVariantMap hints;
-                hints.insert("x-nemo-preview-body", body);
-                hints.insert("x-nemo-preview-summary", summary);
+                // Ours, by the phone's id: found again after a btsyncd restart
+                // or a reboot (lipstick keeps its notifications and their hints)
+                hints.insert(NotificationService::OwnerHint, NotificationService::Owner);
+                hints.insert(NotificationService::PhoneIdHint, QString::number(id));
 
-                if (vibrate == nullptr) // for backwards compatibility
+                if (resync) {
+                    // <rs>1</rs>: the phone sends what it already had after a
+                    // reconnect. No preview banner (lipstick shows none without
+                    // preview summary and body), no vibration, and an update
+                    // keeps its place in the list
+                    hints.insert("x-nemo-feedback", "notif_silent");
+                    hints.insert("x-nemo-feedback-suppressed", true);
+                    const QString timestamp = mService->timestamp(replacesId);
+                    if(!timestamp.isEmpty())
+                        hints.insert("x-nemo-timestamp", timestamp);
+                } else {
+                    hints.insert("x-nemo-preview-body", body);
+                    hints.insert("x-nemo-preview-summary", summary);
+                }
+
+                if (resync) {
+                    // silent, above
+                } else if (vibrate == nullptr) // for backwards compatibility
                     hints.insert("x-nemo-feedback", "notif_strong");
                 else if (vibrate.compare("none") == 0)
                     hints.insert("x-nemo-feedback", "notif_silent");
@@ -145,18 +171,38 @@ public slots:
                 if(reply.type() == QDBusMessage::ErrorMessage) {
                     fprintf(stderr, "NotificationsUpdateChrc::writeValue: D-Bus Error: %s\n", reply.errorMessage().toStdString().c_str());
                 }
+                // lipstick answers 0 when the notification to replace is gone
+                // (closed behind our back): post it as a new one
+                if(replacesId && reply.type() != QDBusMessage::ErrorMessage
+                        && reply.arguments().size() > 0 && reply.arguments()[0].toUInt() == 0) {
+                    qInfo() << "Phone notification" << id << ": lipstick notification" << replacesId << "is gone, posting it again";
+                    mService->mKnownAndroidNotifs.remove(id);
+                    mService->forget(replacesId);
+                    replacesId = 0;
+                    argumentList[1] = 0u;
+                    if(!isCall)
+                        hints.remove("x-nemo-timestamp");
+                    argumentList[6] = hints;
+                    reply = notifyApp.callWithArgumentList(QDBus::AutoDetect, "Notify", argumentList);
+                }
 
                 uint lipstickId = replacesId;
                 if(!replacesId) {
                     if(reply.arguments().size() > 0) {
                         lipstickId = reply.arguments()[0].toUInt();
-                        mService->mKnownAndroidNotifs.insert(id, lipstickId);
+                        if(lipstickId)
+                            mService->mKnownAndroidNotifs.insert(id, lipstickId);
                     }
                 }
                 if(lipstickId) {
                     argumentList[1] = lipstickId;
                     mService->remember(lipstickId, phoneActions,
                                        isCall ? argumentList : QList<QVariant>());
+                    // lipstick stamps a notification without a timestamp hint
+                    // with the current time, also when it replaces one
+                    const QString stamped = hints.value("x-nemo-timestamp").toString();
+                    mService->setTimestamp(lipstickId, stamped.isEmpty()
+                        ? QDateTime::currentDateTimeUtc().toString(Qt::ISODate) : stamped);
                 }
             } else
                 mReader.clear();
@@ -323,6 +369,100 @@ NotificationService::NotificationService(int index, QDBusConnection bus, QObject
         fprintf(stderr, "NotificationService: cannot register %s on the session bus\n", BTSYNCD_NOTIF_PATH);
     if(!session.registerService(SERVICE_NAME))
         fprintf(stderr, "NotificationService: cannot own %s on the session bus\n", SERVICE_NAME);
+
+    // The phone notifications lipstick still shows (it keeps them over a
+    // reboot): now, and whenever lipstick's notification service comes back
+    mLipstickWatcher = new QDBusServiceWatcher(NOTIFICATIONS_SERVICE_NAME, session,
+                                               QDBusServiceWatcher::WatchForRegistration, this);
+    connect(mLipstickWatcher, &QDBusServiceWatcher::serviceRegistered, this, [this] { restoreKnown(); });
+    restoreKnown();
+}
+
+void NotificationService::restoreKnown()
+{
+    QDBusMessage call = QDBusMessage::createMethodCall(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE,
+                                                       NOTIFICATIONS_MAIN_IFACE, "GetNotifications");
+    call << QString(Owner);
+    // Blocking but short: a phone notification arriving before this is
+    // done would otherwise be posted twice
+    const QDBusMessage reply = QDBusConnection::sessionBus().call(call, QDBus::Block, 3000);
+    if(reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
+        qInfo() << "Notifications: no list from lipstick yet:" << reply.errorMessage();
+        return;
+    }
+
+    // a(susssasa{sv}i): app name, id, icon, summary, body, actions, hints, timeout
+    QHash<int, uint> found;
+    QHash<uint, QStringList> phoneActions;
+    QHash<uint, QList<QVariant>> callNotify;
+    QHash<uint, QString> timestamps;
+    QList<uint> duplicates;
+    int listed = 0;
+    const QDBusArgument arg = reply.arguments().at(0).value<QDBusArgument>();
+    arg.beginArray();
+    while(!arg.atEnd()) {
+        QString appName, appIcon, summary, body;
+        uint lipstickId = 0;
+        QStringList actions;
+        QVariantMap hints;
+        int timeout = 0;
+        arg.beginStructure();
+        arg >> appName >> lipstickId >> appIcon >> summary >> body >> actions >> hints >> timeout;
+        arg.endStructure();
+        listed++;
+        bool ok = false;
+        const int phoneId = hints.value(PhoneIdHint).toString().toInt(&ok);
+        if(!ok || !phoneId || !lipstickId)
+            continue;
+        if(found.contains(phoneId)) {
+            // Posted twice (by an older btsyncd): keep the newer one
+            const uint other = found.value(phoneId);
+            duplicates << qMin(other, lipstickId);
+            if(lipstickId < other)
+                continue;
+        }
+        found.insert(phoneId, lipstickId);
+        const QStringList keys = hints.value("x-asteroid-phone-actions").toString().split(',', Qt::SkipEmptyParts);
+        phoneActions.insert(lipstickId, keys);
+        if(keys.contains("answer") || keys.contains("reject"))
+            callNotify.insert(lipstickId, QList<QVariant>() << appName << lipstickId << appIcon << summary
+                                                            << body << actions << hints << timeout);
+        timestamps.insert(lipstickId, hints.value("x-nemo-timestamp").toString());
+    }
+    arg.endArray();
+
+    // lipstick is right about what exists: forget what it no longer has
+    for(auto it = mKnownAndroidNotifs.begin(); it != mKnownAndroidNotifs.end(); ) {
+        if(found.value(it.key(), 0) != it.value()) {
+            forget(it.value());
+            it = mKnownAndroidNotifs.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for(auto it = found.constBegin(); it != found.constEnd(); ++it) {
+        mKnownAndroidNotifs.insert(it.key(), it.value());
+        remember(it.value(), phoneActions.value(it.value()), callNotify.value(it.value()));
+        setTimestamp(it.value(), timestamps.value(it.value()));
+    }
+    static QDBusInterface notifyApp(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE, NOTIFICATIONS_MAIN_IFACE);
+    for(uint dup : duplicates) {
+        if(!found.values().contains(dup))
+            notifyApp.call(QDBus::NoBlock, "CloseNotification", dup);
+    }
+    qInfo() << "Notifications: lipstick has" << found.size() << "phone notifications (of" << listed
+            << "of ours)" << (duplicates.isEmpty() ? "" : "and duplicates, closed:") << duplicates;
+}
+
+QString NotificationService::timestamp(uint notificationId) const
+{
+    return notificationId ? mTimestamps.value(notificationId) : QString();
+}
+
+void NotificationService::setTimestamp(uint notificationId, const QString &timestamp)
+{
+    if(notificationId && !timestamp.isEmpty())
+        mTimestamps.insert(notificationId, timestamp);
 }
 
 void NotificationService::setMtu(int mtu)
@@ -399,6 +539,7 @@ void NotificationService::forget(uint notificationId)
 {
     mPhoneActions.remove(notificationId);
     mCallNotify.remove(notificationId);
+    mTimestamps.remove(notificationId);
 }
 
 QString NotificationService::callTimestamp(uint notificationId) const
