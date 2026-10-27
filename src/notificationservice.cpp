@@ -1080,10 +1080,8 @@ bool NotificationService::storeIcon(const QString &packageName, const QString &h
     if(!QByteArray::fromBase64(data).startsWith("\x89PNG"))
         return false;
     iconCacheToken();   // creates the cache
-    // Older icons of this app go; at most 300 icons are kept
+    // At most 300 icons are kept (an app may use several), the newest
     const QString dir = iconCacheDir();
-    for(const QFileInfo &f : QDir(dir).entryInfoList({packageName + "-*.svg"}, QDir::Files))
-        QFile::remove(f.absoluteFilePath());
     const QFileInfoList all = QDir(dir).entryInfoList({"*.svg"}, QDir::Files, QDir::Time);
     for(int i = 299; i < all.size(); i++)
         QFile::remove(all.at(i).absoluteFilePath());
