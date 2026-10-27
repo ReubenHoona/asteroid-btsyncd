@@ -64,6 +64,12 @@ void BlueZManager::serviceRegistered(const QString& name)
 
     mBus.connect(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, "InterfacesAdded", this, SLOT(InterfacesAdded(QDBusObjectPath, InterfaceList)));
     mBus.connect(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, "InterfacesRemoved", this, SLOT(InterfacesRemoved(QDBusObjectPath, QStringList)));
+    // One match for the PropertiesChanged of every BlueZ object, also those
+    // that appear later. A match per device path was added for every device
+    // ever seen (one per random address while scanning) and never removed,
+    // and dbus-daemon caps a connection's match rules. The slot filters for
+    // the properties updateAdapter() reads.
+    mBus.connect(BLUEZ_SERVICE_NAME, QString(), DBUS_PROPERTIES_IFACE, "PropertiesChanged", this, SLOT(PropertiesChanged(QString, QMap<QString, QVariant>, QStringList)));
 
     updateAdapter();
 }
@@ -101,6 +107,12 @@ void BlueZManager::updateAdapter() {
 
     QDBusInterface remoteOm(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, mBus);
     QDBusMessage result = remoteOm.call("GetManagedObjects");
+    if (result.type() != QDBusMessage::ReplyMessage || result.arguments().isEmpty()) {
+        // bluetoothd gone or not answering: keep the state we have (an error
+        // made locally has no arguments, and at(0) would read past the list)
+        qWarning() << "GetManagedObjects failed:" << result.errorMessage();
+        return;
+    }
 
     const QDBusArgument argument = result.arguments().at(0).value<QDBusArgument>();
     if (argument.currentType() == QDBusArgument::MapType) {
@@ -119,7 +131,6 @@ void BlueZManager::updateAdapter() {
             }
 
             if (value.contains(DEVICE_MANAGER_IFACE)) {
-                 mBus.connect(BLUEZ_SERVICE_NAME, key, DBUS_PROPERTIES_IFACE, "PropertiesChanged", this, SLOT(PropertiesChanged(QString, QMap<QString, QVariant>, QStringList)));
                  QMap<QString, QVariant> properties = value.value(DEVICE_MANAGER_IFACE);
                  if(properties.contains("Connected") && properties.value("Connected").toBool()) {
                     connected = true;
@@ -138,8 +149,6 @@ void BlueZManager::updateAdapter() {
 
     // A new adapter path registers everything (onAdapterChanged)
     const bool newAdapter = adapter != mAdapter;
-    if (!adapter.isEmpty())
-        mBus.connect(BLUEZ_SERVICE_NAME, adapter, DBUS_PROPERTIES_IFACE, "PropertiesChanged", this, SLOT(PropertiesChanged(QString, QMap<QString, QVariant>, QStringList)));
     setAdapter(adapter);
     if (!adapter.isEmpty() && !newAdapter) {
         if (mRegisterAll) {
@@ -274,9 +283,27 @@ void BlueZManager::checkAdvertising()
     });
 }
 
-void BlueZManager::PropertiesChanged(QString, QMap<QString, QVariant>, QStringList)
+void BlueZManager::PropertiesChanged(QString interface, QMap<QString, QVariant> changed, QStringList invalidated)
 {
-    updateAdapter();
+    // updateAdapter() fetches BlueZ's whole object tree with a blocking call:
+    // only for what it reads. A device's RSSI, ManufacturerData or TxPower
+    // change with every advertisement it sends while the adapter discovers.
+    static const QStringList deviceKeys = { QStringLiteral("Connected"), QStringLiteral("ServicesResolved"),
+                                            QStringLiteral("Alias") };
+    static const QStringList adapterKeys = { QStringLiteral("Powered") };
+    const QStringList *keys;
+    if (interface == QLatin1String(DEVICE_MANAGER_IFACE))
+        keys = &deviceKeys;
+    else if (interface == QLatin1String(ADAPTER_IFACE))
+        keys = &adapterKeys;
+    else
+        return;
+    for (const QString &key : *keys) {
+        if (changed.contains(key) || invalidated.contains(key)) {
+            updateAdapter();
+            return;
+        }
+    }
 }
 
 void BlueZManager::onConnectedChanged()

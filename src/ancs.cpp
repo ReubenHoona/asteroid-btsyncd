@@ -36,6 +36,10 @@ void ANCS::searchForAncsCharacteristics()
     QDBusConnection bus = QDBusConnection::systemBus();
     QDBusInterface remoteOm(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, bus);
     QDBusMessage result = remoteOm.call("GetManagedObjects");
+    if (result.type() != QDBusMessage::ReplyMessage || result.arguments().isEmpty()) {
+        qWarning() << "GetManagedObjects failed:" << result.errorMessage();
+        return;
+    }
     QString notificationChar;
     QString controlChar;
     QString dataChar;

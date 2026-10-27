@@ -80,7 +80,7 @@ public slots:
     void serviceUnregistered(const QString& name);
     void InterfacesAdded(QDBusObjectPath path, InterfaceList interfaces);
     void InterfacesRemoved(QDBusObjectPath, QStringList);
-    void PropertiesChanged(QString, QMap<QString, QVariant>, QStringList);
+    void PropertiesChanged(QString interface, QMap<QString, QVariant> changed, QStringList invalidated);
 
     void onConnectedChanged();
     void onServicesResolvedChanged();

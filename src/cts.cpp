@@ -18,6 +18,10 @@ void CTS::searchForTimeCharacteristics() {
     QDBusConnection bus = QDBusConnection::systemBus();
     QDBusInterface remoteOm(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, bus);
     QDBusMessage result = remoteOm.call("GetManagedObjects");
+    if (result.type() != QDBusMessage::ReplyMessage || result.arguments().isEmpty()) {
+        qWarning() << "GetManagedObjects failed:" << result.errorMessage();
+        return;
+    }
     QString timeChar;
     qDebug() << "CTS searching for characteristic";
     const QDBusArgument argument = result.arguments().at(0).value<QDBusArgument>();
