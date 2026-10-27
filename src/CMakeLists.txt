@@ -23,6 +23,7 @@ set(
 	voiceprotocol.cpp
 	voiceservice.cpp
 	voicesource.cpp
+	wakehold.cpp
 )
 set(
 	HEADERS
@@ -50,6 +51,7 @@ set(
 	voiceprotocol.h
 	voiceservice.h
 	voicesource.h
+	wakehold.h
 )
 
 add_executable(asteroid-btsyncd ${SRC} ${HEADERS})
@@ -61,6 +63,7 @@ target_link_libraries(
 		Qt6::DBus
 		PkgConfig::AmberMpris
 		PkgConfig::MLITE
+		PkgConfig::KEEPALIVE
 )
 
 # The microphone for voice replies (without it only WAV test sources work)

@@ -18,6 +18,7 @@
 #include "mediaservice.h"
 #include "characteristic.h"
 #include "common.h"
+#include "wakehold.h"
 
 #include <QDebug>
 #include <QDBusMessage>
@@ -35,6 +36,7 @@ private:
 public slots:
     void WriteValue(QByteArray value, QVariantMap)
     {
+        WakeHoldScope wake;
         m_player->metaData()->setTitle(QString(value));
     }
 };
@@ -51,6 +53,7 @@ private:
 public slots:
     void WriteValue(QByteArray value, QVariantMap)
     {
+        WakeHoldScope wake;
         m_player->metaData()->setAlbumTitle(QString(value));
     }
 };
@@ -67,6 +70,7 @@ private:
 public slots:
     void WriteValue(QByteArray value, QVariantMap)
     {
+        WakeHoldScope wake;
         m_player->metaData()->setContributingArtist(QString(value));
     }
 };
@@ -83,6 +87,7 @@ private:
 public slots:
     void WriteValue(QByteArray value, QVariantMap)
     {
+        WakeHoldScope wake;
         if (!hasMinLength(value, 1))
             return;
         m_player->setPlaybackStatus(value[0] ? Mpris::Playing : Mpris::Paused);
@@ -166,6 +171,7 @@ private:
 public slots:
     void WriteValue(QByteArray value, QVariantMap)
     {
+        WakeHoldScope wake;
         if (!hasMinLength(value, 1))
             return;
         m_player->setVolume(int( (unsigned char) value[0])/100.0);

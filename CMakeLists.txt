@@ -22,6 +22,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core DBus)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(AmberMpris ambermpris6 REQUIRED IMPORTED_TARGET)
 pkg_check_modules(MLITE mlite6 REQUIRED IMPORTED_TARGET)
+pkg_check_modules(KEEPALIVE keepalive REQUIRED IMPORTED_TARGET)
 pkg_check_modules(PulseSimple libpulse-simple IMPORTED_TARGET)
 
 add_subdirectory(src)
