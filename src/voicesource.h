@@ -21,9 +21,11 @@
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QObject>
+#include <QPointer>
 #include <QThread>
 #include <QTimer>
 #include <atomic>
+#include <memory>
 
 /*
  * Where the voice audio comes from: 16 kHz mono PCM16 in 20 ms frames
@@ -68,7 +70,11 @@ private:
     QElapsedTimer mClock;
 };
 
-/* The microphone through PulseAudio (pa_simple), read on its own thread */
+/*
+ * The microphone through PulseAudio (pa_simple), read on its own thread. The
+ * thread shares only its run flag with this object, so a thread still blocked
+ * in PulseAudio when the source stops can finish on its own.
+ */
 class MicSource : public VoiceSource
 {
     Q_OBJECT
@@ -79,9 +85,9 @@ public:
     void stop() override;
 
 private:
-    void run();
+    static void run(std::shared_ptr<std::atomic<bool>> running, QPointer<MicSource> self);
     QThread *mThread = nullptr;
-    std::atomic<bool> mRunning{false};
+    std::shared_ptr<std::atomic<bool>> mRunning;
 };
 
 #endif // VOICESOURCE_H

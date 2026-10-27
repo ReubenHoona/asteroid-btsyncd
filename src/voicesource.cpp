@@ -18,6 +18,7 @@
 #include "voicesource.h"
 #include "voiceprotocol.h"
 
+#include <QCoreApplication>
 #include <QDebug>
 #include <QMetaObject>
 
@@ -94,8 +95,12 @@ bool MicSource::start(QString &error)
     Q_UNUSED(error)
     if (mThread)
         return true;
-    mRunning = true;
-    mThread = QThread::create([this] { run(); });
+    mRunning = std::make_shared<std::atomic<bool>>(true);
+    const std::shared_ptr<std::atomic<bool>> running = mRunning;
+    const QPointer<MicSource> self(this);
+    mThread = QThread::create([running, self] { run(running, self); });
+    // It deletes itself when it ends, also when it outlives this source
+    connect(mThread, &QThread::finished, mThread, &QObject::deleteLater);
     mThread->start();
     return true;
 #else
@@ -106,18 +111,23 @@ bool MicSource::start(QString &error)
 
 void MicSource::stop()
 {
-    mRunning = false;
+    if (mRunning)
+        *mRunning = false;
     if (mThread) {
-        // a read returns within one fragment (20 ms)
-        mThread->wait(2000);
-        delete mThread;
+        // A read returns within one fragment (20 ms), but connecting to a
+        // PulseAudio that hangs does not: then let the thread end on its own
+        // (deleting a running QThread aborts the daemon)
+        if (!mThread->wait(2000))
+            qWarning() << "Voice: the microphone thread is still blocked in PulseAudio, leaving it to finish";
         mThread = nullptr;
     }
 }
 
-void MicSource::run()
+void MicSource::run(std::shared_ptr<std::atomic<bool>> running, QPointer<MicSource> self)
 {
 #ifdef BTSYNCD_HAVE_PULSE
+    // Results go to the main thread, where self is checked: the source may be
+    // gone by then
     pa_sample_spec ss;
     ss.format = PA_SAMPLE_S16LE;
     ss.rate = VoiceProtocol::SampleRate;
@@ -133,19 +143,23 @@ void MicSource::run()
                                   "voice reply", &ss, nullptr, &attr, &err);
     if (!pa) {
         const QString msg = QStringLiteral("PulseAudio: ") + QString::fromUtf8(pa_strerror(err));
-        QMetaObject::invokeMethod(this, [this, msg] { emit failed(msg); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(qApp, [self, msg] { if (self) emit self->failed(msg); }, Qt::QueuedConnection);
         return;
     }
     QByteArray buf(VoiceProtocol::FramePcmBytes, '\0');
-    while (mRunning) {
+    while (*running) {
         if (pa_simple_read(pa, buf.data(), size_t(buf.size()), &err) < 0) {
             const QString msg = QStringLiteral("PulseAudio read: ") + QString::fromUtf8(pa_strerror(err));
-            QMetaObject::invokeMethod(this, [this, msg] { emit failed(msg); }, Qt::QueuedConnection);
+            QMetaObject::invokeMethod(qApp, [self, msg] { if (self) emit self->failed(msg); }, Qt::QueuedConnection);
             break;
         }
         const QByteArray copy = buf;
-        QMetaObject::invokeMethod(this, [this, copy] { if (mRunning) emit frame(copy); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(qApp, [self, running, copy] { if (self && *running) emit self->frame(copy); },
+                                  Qt::QueuedConnection);
     }
     pa_simple_free(pa);
+#else
+    Q_UNUSED(running)
+    Q_UNUSED(self)
 #endif
 }
