@@ -588,9 +588,7 @@ private slots:
         // notification is lost and the first one is shown again.
         write(mUpdate, insert(37, "<su>first</su>") + "\n");
         write(mUpdate, insert(38, "<su>second</su>"));
-        QEXPECT_FAIL("", "bug: stale reader data (patches/btsyncd/0001); the first notification is parsed instead", Continue);
         QCOMPARE(lastNotify().summary, QStringLiteral("second"));
-        QEXPECT_FAIL("", "bug: stale reader data (patches/btsyncd/0001)", Continue);
         QVERIFY(lipstickId(38) != 0);
     }
 
@@ -606,14 +604,12 @@ private slots:
         const QByteArray xml = insert(39, "<su>split</su>");
         mUpdate->WriteValue(xml.left(xml.size() - 4), {});
         mUpdate->WriteValue(xml.right(4), {});      // "ert>"
-        QEXPECT_FAIL("", "bug: closing tag split over writes (patches/btsyncd/0001)", Continue);
         QCOMPARE(mLip->notifyCalls().size(), 1);
         // the same for a removal
         mService->mKnownAndroidNotifs.insert(40, 4000);
         mLip->reset();
         mUpdate->WriteValue("<removed><id>40</id></rem", {});
         mUpdate->WriteValue("oved>", {});
-        QEXPECT_FAIL("", "bug: closing tag split over writes (patches/btsyncd/0001)", Continue);
         QCOMPARE(mLip->closeCalls(), QList<uint>{4000});
     }
 };

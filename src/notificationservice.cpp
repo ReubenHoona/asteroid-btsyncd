@@ -55,6 +55,10 @@ static int optionMtu(const QVariantMap &options)
     return options.contains("mtu") ? options.value("mtu").toInt() : 0;
 }
 
+// The phone's writes are joined until the closing tag of the root element;
+// this much without one is junk
+static const int MaxUpdateSize = 16384;
+
 class NotificationsUpdateChrc : public Characteristic
 {
 public:
@@ -64,18 +68,48 @@ public:
 public slots:
     void WriteValue(QByteArray value, QVariantMap options)
     {
-        int id = 0;
-        uint replacesId;
-        QString packageName, appName, appIcon, summary, body, vibrate = nullptr;
-        QStringList phoneActions;
-        bool resync = false;
-
         // The phone's write woke the watch: stay out of autosleep until the
         // notification is with lipstick (chunks of one notification extend
         // it; the hold ends by itself 5 s after the last chunk)
         WakeHold::hold();
 
         mService->setMtu(optionMtu(options));
+        // Every complete <insert> or <removed> written so far, also when its
+        // closing tag was split over two writes or other bytes follow it
+        mBuffer += value;
+        for(;;) {
+            const int insertEnd = mBuffer.indexOf("</insert>");
+            const int removedEnd = mBuffer.indexOf("</removed>");
+            int end = -1;
+            if(insertEnd >= 0 && (removedEnd < 0 || insertEnd < removedEnd))
+                end = insertEnd + 9;
+            else if(removedEnd >= 0)
+                end = removedEnd + 10;
+            if(end < 0)
+                break;
+            const QByteArray message = mBuffer.left(end).trimmed();
+            mBuffer.remove(0, end);
+            handleMessage(message);
+        }
+        if(mBuffer.trimmed().isEmpty()) {
+            mBuffer.clear();
+        } else if(mBuffer.size() > MaxUpdateSize) {
+            qWarning() << "Notification update without an end, dropped";
+            mBuffer.clear();
+        }
+    }
+
+private:
+    // One whole <insert>...</insert> or <removed>...</removed>
+    void handleMessage(const QByteArray &value)
+    {
+        int id = 0;
+        uint replacesId;
+        QString packageName, appName, appIcon, summary, body, vibrate = nullptr;
+        QStringList phoneActions;
+        bool resync = false;
+
+        mReader.clear();
         mReader.addData(value);
 
         if(value.endsWith("</insert>")) {
@@ -245,9 +279,9 @@ public slots:
             WakeHold::release(WakeHold::GRACE_SHORT_MS);
     }
 
-private:
     NotificationService *mService;
     QXmlStreamReader mReader;
+    QByteArray mBuffer;
 };
 
 /*
@@ -265,9 +299,20 @@ public slots:
     void WriteValue(QByteArray value, QVariantMap options)
     {
         mService->setMtu(optionMtu(options));
-        mReader.addData(value);
-        if(!value.endsWith("</replies>"))
+        mBuffer += value;
+        const int end = mBuffer.indexOf("</replies>");
+        if(end < 0) {
+            if(mBuffer.size() > MaxUpdateSize) {
+                qWarning() << "Canned replies without an end, dropped";
+                mBuffer.clear();
+            }
             return;
+        }
+        mReader.clear();
+        mReader.addData(mBuffer.left(end + 10));
+        mBuffer.remove(0, end + 10);
+        if(mBuffer.trimmed().isEmpty())
+            mBuffer.clear();
 
         QStringList replies;
         if(mReader.readNextStartElement() && mReader.name() == "replies") {
@@ -292,6 +337,7 @@ public slots:
 private:
     NotificationService *mService;
     QXmlStreamReader mReader;
+    QByteArray mBuffer;
 };
 
 /*
