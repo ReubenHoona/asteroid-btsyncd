@@ -22,6 +22,7 @@
 
 #include <QDebug>
 #include <QDBusMessage>
+#include <QXmlStreamReader>
 #include <MprisMetaData>
 
 class MediaTitleChrc : public Characteristic
@@ -94,20 +95,86 @@ public slots:
     }
 };
 
+/*
+ * Version 2 of the media service, phone to watch: what plays, beyond the
+ * title, album, artist and playing flag:
+ *   <mp><st>playing|paused|stopped</st><po>POSITION</po><du>DURATION</du>
+ *       <ra>RATE</ra><an>APP</an></mp>
+ * POSITION and DURATION in seconds (-1 unknown), RATE in percent (100 plays
+ * at normal speed, 0 paused), APP the player's name on the phone; any
+ * element may be missing. The watch's MPRIS player gets the position (with
+ * the time it was set, so a client can run it on), the length, the rate and
+ * the app as its identity.
+ */
+class MediaStateChrc : public Characteristic
+{
+public:
+    MediaStateChrc(MprisPlayer *player, QDBusConnection bus, int index, Service *service)
+        : Characteristic(bus, index, MEDIA_STATE_UUID, {"encrypt-authenticated-write"}, service), m_player(player) {}
+
+private:
+    MprisPlayer *m_player;
+    QByteArray m_buffer;
+
+public slots:
+    void WriteValue(QByteArray value, QVariantMap)
+    {
+        WakeHoldScope wake;
+        m_buffer += value;
+        if(m_buffer.size() > 4096) {
+            m_buffer.clear();
+            return;
+        }
+        if(!value.endsWith("</mp>"))
+            return;
+        QXmlStreamReader reader(m_buffer);
+        m_buffer.clear();
+        if(!reader.readNextStartElement() || reader.name() != QLatin1String("mp"))
+            return;
+        while(reader.readNextStartElement()) {
+            const auto name = reader.name();
+            const QString text = reader.readElementText().trimmed();
+            bool ok = false;
+            if(name == QLatin1String("st")) {
+                if(text == "playing") m_player->setPlaybackStatus(Mpris::Playing);
+                else if(text == "paused") m_player->setPlaybackStatus(Mpris::Paused);
+                else if(text == "stopped") m_player->setPlaybackStatus(Mpris::Stopped);
+            } else if(name == QLatin1String("po")) {
+                const qlonglong s = text.toLongLong(&ok);
+                if(ok && s >= 0)
+                    m_player->setPosition(s * 1000);
+            } else if(name == QLatin1String("du")) {
+                const qlonglong s = text.toLongLong(&ok);
+                if(ok)
+                    m_player->metaData()->setDuration(s > 0 ? QVariant(s * 1000) : QVariant());
+            } else if(name == QLatin1String("ra")) {
+                const int r = text.toInt(&ok);
+                if(ok && r >= 0)
+                    m_player->setRate(r / 100.0);
+            } else if(name == QLatin1String("an")) {
+                m_player->setIdentity(text.isEmpty() ? QStringLiteral("Asteroid BLE Sync Daemon") : text.left(64));
+            }
+        }
+    }
+};
+
 void MediaCommandsChrc::pauseRequested()
 {
+    m_value.resize(1);
     m_value[0] = MEDIA_COMMAND_PAUSE;
     emit valueChanged();
 }
 
 void MediaCommandsChrc::playRequested()
 {
+    m_value.resize(1);
     m_value[0] = MEDIA_COMMAND_PLAY;
     emit valueChanged();
 }
 
 void MediaCommandsChrc::playPauseRequested()
 {
+    m_value.resize(1);
     if(m_player->playbackStatus() == Mpris::Playing)
         m_value[0] = MEDIA_COMMAND_PAUSE;
     else
@@ -118,26 +185,32 @@ void MediaCommandsChrc::playPauseRequested()
 
 void MediaCommandsChrc::stopRequested()
 {
+    m_value.resize(1);
     m_value[0] = MEDIA_COMMAND_PAUSE;
     emit valueChanged();
 }
 
 void MediaCommandsChrc::nextRequested()
 {
+    m_value.resize(1);
     m_value[0] = MEDIA_COMMAND_NEXT;
     emit valueChanged();
 }
 
 void MediaCommandsChrc::previousRequested()
 {
+    m_value.resize(1);
     m_value[0] = MEDIA_COMMAND_PREVIOUS;
     emit valueChanged();
 }
 
 void MediaCommandsChrc::volumeRequested(double volume)
 {
+    // Two bytes: the command and the volume in percent (the value had room
+    // for the command only)
+    m_value.resize(2);
     m_value[0] = MEDIA_COMMAND_VOLUME;
-    m_value[1] = volume*100;
+    m_value[1] = char(qBound(0, int(volume * 100 + 0.5), 100));
     emit valueChanged();
 }
 
@@ -206,6 +279,7 @@ MediaService::MediaService(int index, QDBusConnection bus, QObject *parent) : Se
     m_commandsChrc = new MediaCommandsChrc(m_mprisPlayer, bus, 4, this);
     addCharacteristic(m_commandsChrc);
     addCharacteristic(new MediaVolumeChrc(m_mprisPlayer, bus, 5, this));
+    addCharacteristic(new MediaStateChrc(m_mprisPlayer, bus, 6, this));
 
     connect(m_mprisPlayer, SIGNAL(pauseRequested()), m_commandsChrc, SLOT(pauseRequested()));
     connect(m_mprisPlayer, SIGNAL(playRequested()), m_commandsChrc, SLOT(playRequested()));
