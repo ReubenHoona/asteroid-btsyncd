@@ -24,6 +24,7 @@ set(
 	voiceservice.cpp
 	voicesource.cpp
 	wakehold.cpp
+	phonestatusservice.cpp
 )
 set(
 	HEADERS
@@ -52,6 +53,7 @@ set(
 	voiceservice.h
 	voicesource.h
 	wakehold.h
+	phonestatusservice.h
 )
 
 add_executable(asteroid-btsyncd ${SRC} ${HEADERS})

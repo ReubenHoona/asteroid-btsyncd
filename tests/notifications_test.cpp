@@ -1,5 +1,5 @@
 /*
- * Tests of the notification service (protocol version 3) on a private D-Bus
+ * Tests of the notification service (protocol versions 3 and 4) on a private D-Bus
  * (cmake -DBTSYNCD_TESTS=ON). Run it with a private bus that serves as both
  * the session and the system bus:
  *   dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS notifications_test'
@@ -12,6 +12,15 @@
  *   - find my phone: refused without a subscribed phone; start/stop feedback;
  *     <findphone>stop</findphone> from the phone; FindPhoneChanged signals
  *   - the find-my-watch alert's "found" action
+ * Version 4:
+ *   - conversations: one card per thread through re-posts under new ids,
+ *     quiet in-place updates, a new card (banner, vibration) for new
+ *     messages, removal + insert keeps the card, delayed close
+ *   - importance low, only alert once, ongoing: quiet
+ *   - alarms (vb=alarm, category), Do Not Disturb
+ *   - app icons: stored as SVG, used by name, bad icons refused
+ *   - a dismiss while no phone is subscribed waits for it; its resync does
+ *     not bring the card back
  */
 
 #include "notificationservice.h"
@@ -21,6 +30,9 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusMetaType>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QElapsedTimer>
 #include <QMutex>
 #include <QMutexLocker>
@@ -36,9 +48,10 @@ static int failures = 0;
 static const char *CHR_UPDATE = "/org/asteroidos/btsyncd/service0/char0";
 static const char *CHR_FEEDBACK = "/org/asteroidos/btsyncd/service0/char1";
 static const char *CHR_CAPS = "/org/asteroidos/btsyncd/service0/char3";
+static const char *CHR_ICON = "/org/asteroidos/btsyncd/service0/char4";
 
 struct Posted {
-    QString appName, summary, body;
+    QString appName, appIcon, summary, body;
     uint replacesId = 0;
     QStringList actions;
     QVariantMap hints;
@@ -56,12 +69,13 @@ public:
     uint nextId = 100;
 
 public slots:
-    uint Notify(const QString &appName, uint replacesId, const QString &, const QString &summary,
+    uint Notify(const QString &appName, uint replacesId, const QString &appIcon, const QString &summary,
                 const QString &body, const QStringList &actions, const QVariantMap &hints, int)
     {
         QMutexLocker l(&lock);
         Posted p;
         p.appName = appName;
+        p.appIcon = appIcon;
         p.replacesId = replacesId;
         p.summary = summary;
         p.body = body;
@@ -178,7 +192,7 @@ int main(int argc, char **argv)
         const QDBusMessage r = gattCall(driver, CHR_CAPS, "ReadValue", {QVariantMap()});
         CHECK(r.type() == QDBusMessage::ReplyMessage);
         const QByteArray caps = r.arguments().value(0).toByteArray();
-        CHECK(caps.contains("<version>3</version>"));
+        CHECK(caps.contains("<version>4</version>"));
         CHECK(caps.contains("<findphone>1</findphone>"));
         CHECK(caps.contains("found"));
     }
@@ -291,6 +305,266 @@ int main(int argc, char **argv)
     CHECK(gattCall(driver, CHR_FEEDBACK, "StopNotify", {}).type() == QDBusMessage::ReplyMessage);
     CHECK(waitFor([&] { return collector.findPhoneChanges.size() == 6; }));
     CHECK(collector.findPhoneChanges.value(5) == false);
+
+    // ---- Protocol version 4 ----
+    CHECK(gattCall(driver, CHR_FEEDBACK, "StartNotify", {}).type() == QDBusMessage::ReplyMessage);
+    {
+        const QDBusMessage r = gattCall(driver, CHR_CAPS, "ReadValue", {QVariantMap()});
+        const QByteArray caps = r.arguments().value(0).toByteArray();
+        CHECK(caps.contains("<version>4</version>"));
+        CHECK(caps.contains("<threads>1</threads>"));
+        CHECK(caps.contains("<icons>48</icons>"));
+        CHECK(caps.contains("<iconcache>"));
+        // The token stays while the cache does
+        const QByteArray again = gattCall(driver, CHR_CAPS, "ReadValue", {QVariantMap()}).arguments().value(0).toByteArray();
+        CHECK(caps == again);
+        fprintf(stderr, "capabilities: %s\n", caps.constData());
+    }
+
+    // A conversation: two messages from Dana, one card
+    int before = postedCount(fake);
+    write(driver, "<insert><id>50</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Dana</su>"
+                  "<bo>Are you coming?</bo><ac>reply,open,mute</ac><th>c0ffee01</th>"
+                  "<ms><m><s>Dana</s><t>Hi</t></m><m><s>Dana</s><t>Are you coming?</t></m></ms><pr>4</pr></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 1; }));
+    uint dana = 0;
+    {
+        const Posted p = lastPosted(fake);
+        CHECK(p.replacesId == 0);
+        CHECK(p.body == "Hi\nAre you coming?");
+        CHECK(p.hints.value("x-nemo-preview-body").toString() == "Are you coming?");
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_normal");
+        CHECK(p.hints.value("x-asteroid-thread").toString() == "c0ffee01");
+        QMutexLocker l(&fake.lock);
+        dana = fake.nextId - 1;
+    }
+    // The app re-posts it (new phone id, same content): updated in place, quietly
+    write(driver, "<insert><id>51</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Dana</su>"
+                  "<bo>Are you coming?</bo><ac>reply,open,mute</ac><th>c0ffee01</th>"
+                  "<ms><m><s>Dana</s><t>Hi</t></m><m><s>Dana</s><t>Are you coming?</t></m></ms></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 2; }));
+    {
+        const Posted p = lastPosted(fake);
+        CHECK(p.replacesId == dana);
+        CHECK(!p.hints.contains("x-nemo-preview-body"));
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_silent");
+        CHECK(p.hints.value("x-nemo-feedback-suppressed").toBool());
+        CHECK(p.hints.value("x-asteroid-phone-id").toString() == "51");
+    }
+    // ...and removes the old id: the card stays
+    int closedBefore = 0;
+    {
+        QMutexLocker l(&fake.lock);
+        closedBefore = fake.closed.size();
+    }
+    write(driver, "<removed><id>50</id></removed>");
+    spin(NotificationService::CloseDelayMs + 300);
+    {
+        QMutexLocker l(&fake.lock);
+        CHECK(fake.closed.size() == closedBefore);
+    }
+    // A new message: the card comes anew, at the top, with banner and vibration
+    write(driver, "<insert><id>52</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Dana</su>"
+                  "<bo>Hello?</bo><ac>reply,open,mute</ac><th>c0ffee01</th>"
+                  "<ms><m><s>Dana</s><t>Hi</t></m><m><s>Dana</s><t>Are you coming?</t></m>"
+                  "<m><s>Me</s><t>Yes</t></m><m><s>Dana</s><t>Hello?</t></m></ms></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 3; }));
+    {
+        const Posted p = lastPosted(fake);
+        CHECK(p.replacesId == 0);
+        CHECK(p.body == "Dana: Hi\nDana: Are you coming?\nMe: Yes\nDana: Hello?");
+        CHECK(p.hints.value("x-nemo-preview-body").toString() == "Hello?");
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_normal");
+        QMutexLocker l(&fake.lock);
+        CHECK(fake.closed.size() == closedBefore + 1 && fake.closed.last() == dana);
+        dana = fake.nextId - 1;
+        closedBefore = fake.closed.size();
+    }
+    // Removed and posted again in a moment (Messenger): the card stays
+    write(driver, "<removed><id>52</id></removed>");
+    spin(300);
+    write(driver, "<insert><id>53</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Dana</su>"
+                  "<bo>Hello?</bo><ac>reply,open,mute</ac><th>c0ffee01</th>"
+                  "<ms><m><s>Dana</s><t>Hi</t></m><m><s>Dana</s><t>Are you coming?</t></m>"
+                  "<m><s>Me</s><t>Yes</t></m><m><s>Dana</s><t>Hello?</t></m></ms></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 4; }));
+    CHECK(lastPosted(fake).replacesId == dana);
+    spin(NotificationService::CloseDelayMs + 300);
+    {
+        QMutexLocker l(&fake.lock);
+        CHECK(fake.closed.size() == closedBefore);
+    }
+    // The watch dismisses it: the phone hears about its current id
+    collector.feedback.clear();
+    {
+        QDBusMessage s = QDBusMessage::createSignal("/org/freedesktop/Notifications", "org.freedesktop.Notifications", "NotificationClosed");
+        s << dana << 2u;
+        fakeConn.send(s);
+    }
+    CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
+    CHECK(collector.feedback == "<action><id>53</id><ty>dismiss</ty></action>");
+    // Removed for good: closed after the delay
+    write(driver, "<insert><id>54</id><vb>normal</vb><an>Chat</an><su>Eve</su><bo>Bye</bo><th>c0ffee02</th></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 5; }));
+    uint eve = 0;
+    {
+        QMutexLocker l(&fake.lock);
+        eve = fake.nextId - 1;
+        closedBefore = fake.closed.size();
+    }
+    write(driver, "<removed><id>54</id></removed>");
+    spin(200);
+    {
+        QMutexLocker l(&fake.lock);
+        CHECK(fake.closed.size() == closedBefore);
+    }
+    CHECK(waitFor([&] { QMutexLocker l(&fake.lock); return fake.closed.size() == closedBefore + 1 && fake.closed.last() == eve; }));
+
+    // Unimportant (Android importance low): no banner, no vibration
+    write(driver, "<insert><id>60</id><vb>strong</vb><an>Shop</an><su>Sale</su><bo>Today only</bo><pr>2</pr></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 6; }));
+    CHECK(!lastPosted(fake).hints.contains("x-nemo-preview-body"));
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "notif_silent");
+
+    // Only alert once: new content updates in place, quietly
+    write(driver, "<insert><id>61</id><vb>normal</vb><an>Files</an><su>Upload</su><bo>10%</bo><th>up01</th><oa>1</oa></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 7; }));
+    uint upload = 0;
+    {
+        QMutexLocker l(&fake.lock);
+        upload = fake.nextId - 1;
+    }
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "notif_normal");
+    write(driver, "<insert><id>62</id><vb>normal</vb><an>Files</an><su>Upload</su><bo>50%</bo><th>up01</th><oa>1</oa></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 8; }));
+    CHECK(lastPosted(fake).replacesId == upload);
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "notif_silent");
+    CHECK(lastPosted(fake).body == "50%");
+    // Ongoing: the same
+    write(driver, "<insert><id>63</id><vb>normal</vb><an>Files</an><su>Upload</su><bo>90%</bo><th>up01</th><og>1</og></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 9; }));
+    CHECK(lastPosted(fake).replacesId == upload);
+    CHECK(!lastPosted(fake).hints.contains("x-nemo-preview-body"));
+
+    // A phone alarm going off: ngfd's alarm pattern, and its category for the launcher
+    write(driver, "<insert><id>70</id><vb>alarm</vb><pn>com.example.clock</pn><an>Clock</an><su>Alarm</su><bo>07:00</bo>"
+                  "<ac>open,mute</ac><ax><a>Snooze</a><a>Dismiss</a></ax><ca>alarm</ca><pr>5</pr></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 10; }));
+    {
+        const Posted p = lastPosted(fake);
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "alarm");
+        CHECK(p.hints.value("x-asteroid-category").toString() == "alarm");
+        CHECK(p.hints.value("x-asteroid-app-actions").toString() == "Snooze\nDismiss");
+    }
+
+    // Do Not Disturb: quiet, but the alarm still rings
+    service.setDoNotDisturb(true);
+    write(driver, "<insert><id>71</id><vb>strong</vb><an>Mail</an><su>Frank</su><bo>Report</bo></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 11; }));
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "notif_silent");
+    CHECK(!lastPosted(fake).hints.contains("x-nemo-preview-body"));
+    write(driver, "<insert><id>72</id><vb>alarm</vb><an>Clock</an><su>Timer</su><bo>Time's up</bo><ca>alarm</ca></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 12; }));
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "alarm");
+    service.setDoNotDisturb(false);
+
+    // App icons: one icon in two writes, then a notification that uses it
+    {
+        static const char *png1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        const QByteArray icon = QByteArray("<icon><pn>org.example.chat</pn><h>ab12cd34</h><d>") + png1x1 + "</d></icon>";
+        QVariantMap options;
+        options.insert("mtu", 185);
+        CHECK(gattCall(driver, CHR_ICON, "WriteValue", {icon.left(60), options}).type() == QDBusMessage::ReplyMessage);
+        CHECK(gattCall(driver, CHR_ICON, "WriteValue", {icon.mid(60), options}).type() == QDBusMessage::ReplyMessage);
+        const QString path = NotificationService::iconPath("org.example.chat", "ab12cd34");
+        CHECK(waitFor([&] { return QFile::exists(path); }));
+        QFile f(path);
+        CHECK(f.open(QIODevice::ReadOnly));
+        const QByteArray svg = f.readAll();
+        CHECK(svg.startsWith("<svg") && svg.contains(QByteArray("data:image/png;base64,") + png1x1));
+        // Not an icon: bad package, not a PNG, not base64
+        CHECK(!NotificationService::storeIcon("../evil", "ab", png1x1));
+        CHECK(!NotificationService::storeIcon("org.example.x", "ab", QByteArray("aGVsbG8=")));
+        CHECK(!NotificationService::storeIcon("org.example.x", "ab", QByteArray("<svg/>")));
+        CHECK(!NotificationService::storeIcon("org.example.x", "AB!", png1x1));
+
+        write(driver, "<insert><id>80</id><vb>none</vb><pn>org.example.chat</pn><an>Chat</an><ai>ios-chatbubbles-outline</ai>"
+                      "<su>Gus</su><bo>Yo</bo><ic>ab12cd34</ic></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == before + 13; }));
+        QString shown;
+        {
+            QMutexLocker l(&fake.lock);
+            shown = fake.posted.last().appIcon;
+        }
+        // The launcher's Icon looks in /usr/share/icons/asteroid/NAME.svg
+        CHECK(shown.startsWith("../"));
+        const QString resolved = QDir::cleanPath(QStringLiteral("/usr/share/icons/asteroid/") + shown + ".svg");
+        fprintf(stderr, "icon name %s -> %s\n", qPrintable(shown), qPrintable(resolved));
+        // Lexically "/../../../PATH"; the kernel stops ".." at the root
+        QString fromRoot = resolved;
+        while(fromRoot.startsWith(QLatin1String("/../")))
+            fromRoot = fromRoot.mid(3);
+        CHECK(fromRoot == path);
+        CHECK(QFile::exists(QStringLiteral("/") + shown + ".svg"));
+        // An icon the watch does not have: the icon name
+        write(driver, "<insert><id>81</id><vb>none</vb><pn>org.example.chat</pn><an>Chat</an><ai>ios-chatbubbles-outline</ai>"
+                      "<su>Gus</su><bo>Yo</bo><ic>ffff0000</ic></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == before + 14; }));
+        {
+            QMutexLocker l(&fake.lock);
+            CHECK(fake.posted.last().appIcon == "ios-chatbubbles-outline");
+        }
+    }
+
+    // Dismissed while the phone is away: sent when it is back, and its
+    // resync does not bring the card back
+    write(driver, "<insert><id>90</id><vb>none</vb><an>Mail</an><su>Hal</su><bo>Hi</bo></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 15; }));
+    uint hal = 0;
+    {
+        QMutexLocker l(&fake.lock);
+        hal = fake.nextId - 1;
+    }
+    CHECK(gattCall(driver, CHR_FEEDBACK, "StopNotify", {}).type() == QDBusMessage::ReplyMessage);
+    collector.feedback.clear();
+    {
+        QDBusMessage s = QDBusMessage::createSignal("/org/freedesktop/Notifications", "org.freedesktop.Notifications", "NotificationClosed");
+        s << hal << 2u;
+        fakeConn.send(s);
+    }
+    spin(300);
+    CHECK(collector.feedback.isEmpty());
+    write(driver, "<insert><id>90</id><vb>none</vb><an>Mail</an><su>Hal</su><bo>Hi</bo><rs>1</rs></insert>");
+    spin(300);
+    CHECK(postedCount(fake) == before + 15);
+    CHECK(gattCall(driver, CHR_FEEDBACK, "StartNotify", {}).type() == QDBusMessage::ReplyMessage);
+    CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }, 4000));
+    CHECK(collector.feedback == "<action><id>90</id><ty>dismiss</ty></action>");
+
+    // The decisions on their own
+    {
+        PhoneNotification n;
+        n.vibrate = "normal";
+        CHECK(PostPlan::decide(n, false, true, false).kind == PostPlan::New);
+        CHECK(PostPlan::decide(n, false, true, false).vibrate);
+        CHECK(PostPlan::decide(n, true, true, false).kind == PostPlan::Repost);
+        CHECK(PostPlan::decide(n, true, false, false).kind == PostPlan::Update);
+        CHECK(!PostPlan::decide(n, true, false, false).vibrate);
+        n.vibrate = "none";
+        CHECK(PostPlan::decide(n, false, true, false).preview && !PostPlan::decide(n, false, true, false).vibrate);
+        n.vibrate = "ringtone";
+        n.phoneActions = QStringList() << "answer" << "reject";
+        CHECK(PostPlan::decide(n, true, true, false).kind == PostPlan::Update);
+        CHECK(PostPlan::decide(n, true, true, false).vibrate);
+        CHECK(!PostPlan::decide(n, true, true, true).vibrate);
+        n.phoneActions = QStringList() << "found";
+        CHECK(PostPlan::decide(n, false, true, true).vibrate);
+        n.phoneActions.clear();
+        n.vibrate = "strong";
+        n.resync = true;
+        CHECK(!PostPlan::decide(n, false, true, false).preview);
+        CHECK(PostPlan::decide(n, true, true, false).kind == PostPlan::Update);
+    }
 
     fakeThread.quit();
     fakeThread.wait();

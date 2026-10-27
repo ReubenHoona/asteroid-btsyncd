@@ -20,14 +20,69 @@
 
 #include <QObject>
 #include <QHash>
+#include <QList>
+#include <QPair>
 #include <QSet>
 #include <QStringList>
+#include <QVariant>
 
 #include "service.h"
 
 class NotificationService;
 class QDBusServiceWatcher;
 class QTimer;
+class QXmlStreamReader;
+
+/*
+ * One <insert> from the phone. Version 4 adds the conversation (<th>,
+ * <ms>), Android's importance and alert flags (<pr>, <oa>, <og>), its
+ * category (<ca>) and the app icon sent before (<ic>).
+ */
+struct PhoneNotification
+{
+    int id = 0;
+    QString packageName, appName, appIcon, summary, body;
+    // null: no <vb> (an old phone), the strong pattern
+    QString vibrate;
+    QStringList phoneActions, appActions, smartReplies;
+    bool resync = false;
+    // Version 4
+    QString thread;
+    QList<QPair<QString, QString>> messages;   // sender, text; oldest first
+    int importance = 0;                         // Android's 1 (min) .. 5 (max), 0 unknown
+    bool onlyAlertOnce = false;
+    bool ongoing = false;
+    QString category;
+    QString iconHash;
+
+    // Reads the children of the <insert> element the reader is on
+    static PhoneNotification parse(QXmlStreamReader &reader);
+    bool isCall() const { return phoneActions.contains("answer") || phoneActions.contains("reject"); }
+    // The body to show: the conversation's messages when there are some
+    QString shownBody() const;
+    // What the banner shows: the newest message
+    QString previewBody() const;
+};
+
+/*
+ * How btsyncd posts a phone notification:
+ *   New      a card the watch does not have yet
+ *   Update   replaces its card in place (lipstick neither shows a banner nor
+ *            vibrates for a replacement)
+ *   Repost   new content for a card the phone wants to alert for again (a new
+ *            message in a conversation): the old card goes, a new one comes
+ *            at the top, with banner and vibration
+ * preview: with a banner; vibrate: with the phone's vibration pattern.
+ */
+struct PostPlan
+{
+    enum Kind { New, Update, Repost };
+    Kind kind = New;
+    bool preview = false;
+    bool vibrate = false;
+
+    static PostPlan decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb);
+};
 
 /*
  * Watch to phone: what the user did with a notification, as XML in
@@ -39,6 +94,8 @@ class QTimer;
  *   ty=app, ix=N      the phone's own action N of the notification's <ax>
  *   ty=found          the find-my-watch alert was found
  *   ty=findphone, id=0, tx=start|stop   ring the phone / stop ringing it
+ * A dismiss while no phone is subscribed waits (version 4) and goes out
+ * when a phone subscribes again.
  */
 class NotificationsFeedbackChrc : public Characteristic
 {
@@ -102,6 +159,8 @@ public slots:
 
 signals:
     void FindPhoneChanged(bool ringing);
+    // The phone (dis)connected: subscribed to the feedback or not any more
+    void PhoneConnectedChanged(bool connected);
 
 private:
     NotificationService *mService;
@@ -118,6 +177,11 @@ public:
     static constexpr const char *Owner = "asteroid-btsyncd";
     static constexpr const char *OwnerHint = "x-nemo-owner";
     static constexpr const char *PhoneIdHint = "x-asteroid-phone-id";
+    // Version 4: the conversation's key, and the Android category
+    static constexpr const char *ThreadHint = "x-asteroid-thread";
+    static constexpr const char *CategoryHint = "x-asteroid-category";
+    // A card the phone removed closes this much later (see removed())
+    static const int CloseDelayMs = 1500;
 
     // Phone notification id -> lipstick notification id
     QHash<int, uint> mKnownAndroidNotifs;
@@ -133,6 +197,27 @@ public:
     void setTimestamp(uint notificationId, const QString &timestamp);
 
     void setMtu(int mtu);
+
+    // A notification from the phone, and its removal
+    void post(const PhoneNotification &n);
+    void removed(int phoneId);
+
+    // Do Not Disturb (the watch's, synced with the phone's by the phone
+    // status service): phone notifications come without banner or vibration,
+    // but alarms and the find-my-watch alert
+    void setDoNotDisturb(bool on) { mDoNotDisturb = on; }
+    bool doNotDisturb() const { return mDoNotDisturb; }
+
+    // The protocol version 4 app icon cache (~/.cache/asteroid-btsyncd/icons):
+    // its token changes when it starts empty, so the phone sends its icons again
+    static QString iconCacheToken();
+    static QString iconPath(const QString &packageName, const QString &hash);
+    // The icon name for the launcher (an SVG it finds through its icon
+    // directory), "" when the watch does not have that icon
+    static QString iconName(const QString &packageName, const QString &hash);
+    static bool storeIcon(const QString &packageName, const QString &hash, const QByteArray &base64Png);
+    static QByteArray capabilities();
+
     bool reply(uint notificationId, const QString &text);
     bool silence(uint notificationId);
 
@@ -150,12 +235,14 @@ public:
 
 signals:
     void findPhoneChanged(bool ringing);
+    void phoneConnectedChanged(bool connected);
 
 public:
     // What the phone offered for a notification (by lipstick id), and for a
     // call the Notify arguments it was shown with (to update it)
     void remember(uint notificationId, const QStringList &phoneActions,
-                  const QList<QVariant> &callNotify);
+                  const QList<QVariant> &callNotify, const QString &thread = QString(),
+                  uint content = 0);
     void forget(uint notificationId);
     QString callTimestamp(uint notificationId) const;
 
@@ -166,6 +253,9 @@ private slots:
 private:
     void sendFeedback(int phoneId, const QString &type, const QString &text = QString(), int index = -1);
     void setFindingPhone(bool ringing);
+    void closeNow(uint lipstickId);
+    void flushQueuedDismissals();
+    static uint contentHash(const QString &summary, const QString &body);
 
     NotificationsFeedbackChrc *mFeedback;
     // Lipstick ids whose close follows an action already reported to the
@@ -179,6 +269,21 @@ private:
     QTimer *mFindPhoneTimeout = nullptr;
     bool mFindingPhone = false;
     int mMtu = 23;
+    bool mDoNotDisturb = false;
+
+    // Version 4: the card of each conversation (thread key -> lipstick id,
+    // and back), and what each card shows (to alert only for new content)
+    QHash<QString, uint> mThreads;
+    QHash<uint, QString> mThreadOf;
+    QHash<uint, uint> mContent;
+    // Cards the phone removed, closed a moment later: a conversation the app
+    // re-posts (remove, then insert) keeps its card
+    QHash<uint, int> mPendingClose;
+    int mCloseToken = 0;
+    // Dismissed while no phone was subscribed: (phone id, when), sent when a
+    // phone subscribes; the phone's resync must not bring them back
+    QList<QPair<int, qint64>> mQueuedDismissals;
+    QHash<int, qint64> mDismissedAway;
 };
 
 #endif // NOTIFICATIONSERVICE_H

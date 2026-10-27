@@ -24,6 +24,7 @@
 #include "timeservice.h"
 #include "healthservice.h"
 #include "voiceservice.h"
+#include "phonestatusservice.h"
 #ifdef BTSYNCD_HAVE_CALENDAR
 #include "calendarservice.h"
 #endif
@@ -47,6 +48,8 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     // The phone's calendar into mkcal
     addService(new CalendarService(8, bus));
 #endif
+    // The phone's battery and Do Not Disturb (protocol version 4)
+    addService(new PhoneStatusService(9, bus, notifications));
 
     qDBusRegisterMetaType<InterfaceList>();
     qDBusRegisterMetaType<ManagedObjectList>();
