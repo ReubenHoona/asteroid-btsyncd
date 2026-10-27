@@ -27,6 +27,7 @@
 #include <QDBusMessage>
 #include <QDBusServiceWatcher>
 #include <QDebug>
+#include <QTimer>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 
@@ -41,14 +42,43 @@ static QString actionLabel(const QString &key)
     if(key == "reject") return QObject::tr("Decline");
     if(key == "silence") return QObject::tr("Silence");
     if(key == "end")    return QObject::tr("End call");
+    if(key == "found")  return QObject::tr("Found it");
     return key;
+}
+
+// At most this many of the phone's own actions (<ax>) and smart replies (<sr>)
+static const int MaxAppActions = 3;
+static const int MaxSmartReplies = 5;
+
+// The texts of the <item> children of the element the reader is on, trimmed,
+// newlines folded, at most max of them, each at most maxLength characters
+static QStringList readTextList(QXmlStreamReader &reader, const char *item, int max, int maxLength)
+{
+    QStringList list;
+    while(reader.readNextStartElement()) {
+        if(reader.name() == QLatin1String(item)) {
+            QString text = reader.readElementText().simplified();
+            if(text.length() > maxLength)
+                text = text.left(maxLength - 1) + QChar(0x2026);
+            if(!text.isEmpty() && list.size() < max)
+                list << text;
+        } else {
+            reader.skipCurrentElement();
+        }
+    }
+    return list;
 }
 
 // What this watch understands, for the capabilities characteristic
 static const char CAPABILITIES[] =
-    "<capabilities><version>2</version>"
-    "<actions>dismiss,reply,open,mute,answer,reject,silence,end</actions>"
-    "<replies>1</replies></capabilities>";
+    "<capabilities><version>3</version>"
+    "<actions>dismiss,reply,open,mute,answer,reject,silence,end,found</actions>"
+    "<replies>1</replies>"
+    // Version 3: smart replies (<sr>), the phone's own actions (<ax>, fed
+    // back as ty=app), find my phone (feedback ty=findphone, <findphone>
+    // from the phone)
+    "<smartreplies>5</smartreplies><appactions>3</appactions><findphone>1</findphone>"
+    "</capabilities>";
 
 static int optionMtu(const QVariantMap &options)
 {
@@ -67,7 +97,7 @@ public slots:
         int id = 0;
         uint replacesId;
         QString packageName, appName, appIcon, summary, body, vibrate = nullptr;
-        QStringList phoneActions;
+        QStringList phoneActions, appActions, smartReplies;
         bool resync = false;
 
         // The phone's write woke the watch: stay out of autosleep until the
@@ -92,6 +122,10 @@ public slots:
                         phoneActions = mReader.readElementText().split(',', Qt::SkipEmptyParts);
                     else if(mReader.name() == "rs")
                         resync = mReader.readElementText().trimmed() == "1";
+                    else if(mReader.name() == "ax")
+                        appActions = readTextList(mReader, "a", MaxAppActions, 40);
+                    else if(mReader.name() == "sr")
+                        smartReplies = readTextList(mReader, "r", MaxSmartReplies, 120);
                     else mReader.skipCurrentElement();
                 }
                 mReader.clear();
@@ -157,10 +191,19 @@ public slots:
                         continue;
                     actions << key << actionLabel(key);
                 }
+                // The phone's own actions (Archive, Mark as read, Snooze...),
+                // by index; the labels also go in a hint for the launcher
+                for(int i = 0; i < appActions.size(); i++)
+                    actions << NotificationService::appActionKey(i) << appActions.at(i);
+                if(!appActions.isEmpty())
+                    hints.insert("x-asteroid-app-actions", appActions.join('\n'));
+                // Android's suggested replies, shown before the canned ones
+                if(!smartReplies.isEmpty())
+                    hints.insert("x-asteroid-smart-replies", smartReplies.join('\n'));
                 // The launcher looks for this to know the notification came
                 // from the phone (and can be acted on there)
-                if(!phoneActions.isEmpty())
-                    hints.insert("x-asteroid-phone-actions", phoneActions.join(','));
+                if(!phoneActions.isEmpty() || !appActions.isEmpty())
+                    hints.insert("x-asteroid-phone-actions", phoneActions.isEmpty() ? QStringLiteral("dismiss") : phoneActions.join(','));
 
                 QList<QVariant> argumentList;
                 argumentList << appName;
@@ -235,6 +278,15 @@ public slots:
                 }
             } else
                 mReader.clear();
+        } else if(value.endsWith("</findphone>")) {
+            // Version 3: <findphone>stop</findphone>, the phone stopped
+            // ringing (found there, or its time ran out)
+            QString state;
+            if(mReader.readNextStartElement() && mReader.name() == "findphone")
+                state = mReader.readElementText().trimmed();
+            mReader.clear();
+            if(state == "stop")
+                mService->phoneStoppedRinging();
         }
 
         // Posted (or closed): a short grace for lipstick's feedback (ngfd)
@@ -330,6 +382,18 @@ void NotificationsFeedbackChrc::send(const QByteArray &xml, int mtu)
     }
 }
 
+void NotificationsFeedbackChrc::StartNotify()
+{
+    mNotifying = true;
+    emit notifyingChanged(true);
+}
+
+void NotificationsFeedbackChrc::StopNotify()
+{
+    mNotifying = false;
+    emit notifyingChanged(false);
+}
+
 void NotificationsFeedbackChrc::emitPropertiesChanged()
 {
     QDBusConnection connection = QDBusConnection::systemBus();
@@ -351,6 +415,7 @@ void NotificationsFeedbackChrc::emitPropertiesChanged()
 NotificationsDBusApi::NotificationsDBusApi(NotificationService *service)
     : QObject(service), mService(service)
 {
+    connect(service, &NotificationService::findPhoneChanged, this, &NotificationsDBusApi::FindPhoneChanged);
 }
 
 bool NotificationsDBusApi::Reply(uint notificationId, const QString &text)
@@ -361,6 +426,21 @@ bool NotificationsDBusApi::Reply(uint notificationId, const QString &text)
 bool NotificationsDBusApi::Silence(uint notificationId)
 {
     return mService->silence(notificationId);
+}
+
+bool NotificationsDBusApi::FindPhone(bool start)
+{
+    return mService->findPhone(start);
+}
+
+bool NotificationsDBusApi::FindingPhone()
+{
+    return mService->findingPhone();
+}
+
+bool NotificationsDBusApi::PhoneConnected()
+{
+    return mService->phoneConnected();
 }
 
 NotificationService::NotificationService(int index, QDBusConnection bus, QObject *parent) : Service(bus, index, NOTIF_UUID, parent)
@@ -377,8 +457,20 @@ NotificationService::NotificationService(int index, QDBusConnection bus, QObject
     session.connect(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE,
         NOTIFICATIONS_MAIN_IFACE, "ActionInvoked", this, SLOT(ActionInvoked(uint, QString)));
 
+    // A phone that disconnects (or unsubscribes) is not ringing any more;
+    // one that does not stop by itself is stopped after a while
+    connect(mFeedback, &NotificationsFeedbackChrc::notifyingChanged, this, [this](bool notifying) {
+        if(!notifying)
+            setFindingPhone(false);
+    });
+    mFindPhoneTimeout = new QTimer(this);
+    mFindPhoneTimeout->setSingleShot(true);
+    mFindPhoneTimeout->setInterval(120 * 1000);
+    connect(mFindPhoneTimeout, &QTimer::timeout, this, [this] { findPhone(false); });
+
     // The launcher's replies come in on the session bus
-    if(!session.registerObject(BTSYNCD_NOTIF_PATH, new NotificationsDBusApi(this), QDBusConnection::ExportAllSlots))
+    if(!session.registerObject(BTSYNCD_NOTIF_PATH, new NotificationsDBusApi(this),
+                               QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals))
         fprintf(stderr, "NotificationService: cannot register %s on the session bus\n", BTSYNCD_NOTIF_PATH);
     if(!session.registerService(SERVICE_NAME))
         fprintf(stderr, "NotificationService: cannot own %s on the session bus\n", SERVICE_NAME);
@@ -484,7 +576,7 @@ void NotificationService::setMtu(int mtu)
         mMtu = mtu;
 }
 
-void NotificationService::sendFeedback(int phoneId, const QString &type, const QString &text)
+void NotificationService::sendFeedback(int phoneId, const QString &type, const QString &text, int index)
 {
     QByteArray xml;
     QXmlStreamWriter w(&xml);
@@ -493,8 +585,63 @@ void NotificationService::sendFeedback(int phoneId, const QString &type, const Q
     w.writeTextElement("ty", type);
     if(!text.isEmpty())
         w.writeTextElement("tx", text);
+    if(index >= 0)
+        w.writeTextElement("ix", QString::number(index));
     w.writeEndElement();
     mFeedback->send(xml, mMtu);
+}
+
+QString NotificationService::appActionKey(int index)
+{
+    return QStringLiteral("app-") + QString::number(index);
+}
+
+int NotificationService::appActionIndex(const QString &key)
+{
+    if(!key.startsWith(QLatin1String("app-")))
+        return -1;
+    bool ok = false;
+    const int index = key.mid(4).toInt(&ok);
+    return ok && index >= 0 && index < MaxAppActions ? index : -1;
+}
+
+bool NotificationService::phoneConnected() const
+{
+    return mFeedback->notifying();
+}
+
+bool NotificationService::findPhone(bool start)
+{
+    if(start && !phoneConnected()) {
+        qInfo() << "Find phone: no phone connected";
+        setFindingPhone(false);
+        return false;
+    }
+    // A stop also goes out when the watch thinks the phone is quiet: the
+    // phone may still ring from an earlier start
+    if(phoneConnected())
+        sendFeedback(0, "findphone", start ? QStringLiteral("start") : QStringLiteral("stop"));
+    qInfo() << "Find phone:" << (start ? "start" : "stop");
+    setFindingPhone(start);
+    return true;
+}
+
+void NotificationService::phoneStoppedRinging()
+{
+    qInfo() << "Find phone: the phone stopped ringing";
+    setFindingPhone(false);
+}
+
+void NotificationService::setFindingPhone(bool ringing)
+{
+    if(ringing)
+        mFindPhoneTimeout->start();
+    else
+        mFindPhoneTimeout->stop();
+    if(mFindingPhone == ringing)
+        return;
+    mFindingPhone = ringing;
+    emit findPhoneChanged(ringing);
 }
 
 bool NotificationService::reply(uint notificationId, const QString &text)
@@ -568,7 +715,11 @@ void NotificationService::ActionInvoked(uint replacesId, const QString &actionKe
     // A reply needs its text: it comes through Reply(), not as a bare action
     if(!id || actionKey == "reply" || actionKey == "default")
         return;
-    sendFeedback(id, actionKey);
+    const int appIndex = appActionIndex(actionKey);
+    if(appIndex >= 0)
+        sendFeedback(id, "app", QString(), appIndex);
+    else
+        sendFeedback(id, actionKey);
     mActioned.insert(replacesId);
 }
 

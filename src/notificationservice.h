@@ -27,14 +27,18 @@
 
 class NotificationService;
 class QDBusServiceWatcher;
+class QTimer;
 
 /*
  * Watch to phone: what the user did with a notification, as XML in
  * notifications of at most MTU - 3 bytes; the phone joins them until the
  * closing tag:
- *   <action><id>ID</id><ty>TYPE</ty><tx>TEXT</tx></action>
+ *   <action><id>ID</id><ty>TYPE</ty><tx>TEXT</tx><ix>INDEX</ix></action>
  * TYPE is dismiss, or one of the actions the phone offered in <ac>; TEXT
- * only for reply.
+ * only for reply. Protocol version 3 adds:
+ *   ty=app, ix=N      the phone's own action N of the notification's <ax>
+ *   ty=found          the find-my-watch alert was found
+ *   ty=findphone, id=0, tx=start|stop   ring the phone / stop ringing it
  */
 class NotificationsFeedbackChrc : public Characteristic
 {
@@ -44,15 +48,23 @@ class NotificationsFeedbackChrc : public Characteristic
 public:
     NotificationsFeedbackChrc(QDBusConnection bus, int index, Service *service);
     void send(const QByteArray &xml, int mtu);
+    // A phone has subscribed (BlueZ StartNotify): it gets what is sent
+    bool notifying() const { return mNotifying; }
+
+public slots:
+    void StartNotify() override;
+    void StopNotify() override;
 
 signals:
     void valueChanged();
+    void notifyingChanged(bool notifying);
 
 private slots:
     void emitPropertiesChanged();
 
 private:
     QByteArray mValue;
+    bool mNotifying = false;
     QByteArray getValue() { return mValue; }
 };
 
@@ -77,6 +89,19 @@ public slots:
      * keeps ringing until answered, declined or ended.
      */
     bool Silence(uint notificationId);
+    /*
+     * Find my phone: start (or stop) ringing the phone. Returns false when
+     * no phone is subscribed to the feedback (nothing to ring). The phone
+     * stops by itself after a while, or when found there: FindPhoneChanged
+     * tells (phones with protocol version 3 report the stop).
+     */
+    bool FindPhone(bool start);
+    bool FindingPhone();
+    // A phone is connected and subscribed to the feedback
+    bool PhoneConnected();
+
+signals:
+    void FindPhoneChanged(bool ringing);
 
 private:
     NotificationService *mService;
@@ -111,6 +136,22 @@ public:
     bool reply(uint notificationId, const QString &text);
     bool silence(uint notificationId);
 
+    // Find my phone (see NotificationsDBusApi::FindPhone)
+    bool findPhone(bool start);
+    bool findingPhone() const { return mFindingPhone; }
+    bool phoneConnected() const;
+    // The phone stopped ringing (found there, or its time ran out)
+    void phoneStoppedRinging();
+
+    // Freedesktop action key for the phone's own action N, and back (-1 if
+    // the key is not one)
+    static QString appActionKey(int index);
+    static int appActionIndex(const QString &key);
+
+signals:
+    void findPhoneChanged(bool ringing);
+
+public:
     // What the phone offered for a notification (by lipstick id), and for a
     // call the Notify arguments it was shown with (to update it)
     void remember(uint notificationId, const QStringList &phoneActions,
@@ -123,7 +164,8 @@ private slots:
     void ActionInvoked(uint replacesId, const QString &actionKey);
 
 private:
-    void sendFeedback(int phoneId, const QString &type, const QString &text = QString());
+    void sendFeedback(int phoneId, const QString &type, const QString &text = QString(), int index = -1);
+    void setFindingPhone(bool ringing);
 
     NotificationsFeedbackChrc *mFeedback;
     // Lipstick ids whose close follows an action already reported to the
@@ -134,6 +176,8 @@ private:
     QHash<uint, QList<QVariant>> mCallNotify;
     QHash<uint, QString> mTimestamps;
     QDBusServiceWatcher *mLipstickWatcher = nullptr;
+    QTimer *mFindPhoneTimeout = nullptr;
+    bool mFindingPhone = false;
     int mMtu = 23;
 };
 
