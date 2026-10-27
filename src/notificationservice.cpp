@@ -588,6 +588,9 @@ void NotificationService::sendFeedback(int phoneId, const QString &type, const Q
     if(index >= 0)
         w.writeTextElement("ix", QString::number(index));
     w.writeEndElement();
+    // What went to the phone, without the text of a reply
+    qInfo() << "Feedback to the phone:" << type << "for" << phoneId << (index >= 0 ? QString("index %1").arg(index) : QString())
+            << (mFeedback->notifying() ? "" : "(no phone subscribed)");
     mFeedback->send(xml, mMtu);
 }
 
