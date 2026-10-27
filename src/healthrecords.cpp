@@ -111,11 +111,31 @@ Page query(const QString &root, Type type, qint64 since, int max)
     const QDir dir(root + sensorDir(type));
     QList<Entry> entries;
     const QStringList names = dir.entryList({QStringLiteral("*.log")}, QDir::Files, QDir::Name);
+    // Read only as many days as the page needs: a phone syncing a long
+    // history asks page after page, and reading every later day for each
+    // page made a full sync quadratic in the history. A day file holds the
+    // records of a local date, so its times lie within -14 h / +12 h of that
+    // date in UTC: once more than max records after since are read up to
+    // date D, the files of D + 3 and later only hold later times.
+    QDate lastDate;
+    bool skipped = false;
+    qsizetype after = 0;
     for (const QString &name : names) {
         const QDate date = QDate::fromString(name.chopped(4), QStringLiteral("yyyy-MM-dd"));
         if (!date.isValid() || date < first)
             continue;
+        if (lastDate.isValid() && date > lastDate) {
+            skipped = true;
+            break;
+        }
+        const qsizetype before = entries.size();
         readDay(dir.filePath(name), date, type, entries);
+        for (qsizetype i = before; i < entries.size(); i++) {
+            if (entries[i].time > since)
+                after++;
+        }
+        if (!lastDate.isValid() && after > max)
+            lastDate = date.addDays(2);
     }
 
     entries.removeIf([since](const Entry &e) { return e.time <= since; });
@@ -128,7 +148,7 @@ Page query(const QString &root, Type type, qint64 since, int max)
     while (n < entries.size() && (n < max || entries[n].time == entries[n - 1].time))
         n++;
 
-    page.more = n < entries.size();
+    page.more = n < entries.size() || skipped;
     if (n > 0)
         page.t0 = type == Steps ? entries[0].start : entries[0].time;
     for (qsizetype i = 0; i < n; i++)
