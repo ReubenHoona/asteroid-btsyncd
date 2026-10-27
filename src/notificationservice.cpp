@@ -18,6 +18,7 @@
 #include "notificationservice.h"
 #include "characteristic.h"
 #include "common.h"
+#include "wakehold.h"
 
 #include <MDConfItem>
 #include <QDateTime>
@@ -68,6 +69,11 @@ public slots:
         QString packageName, appName, appIcon, summary, body, vibrate = nullptr;
         QStringList phoneActions;
         bool resync = false;
+
+        // The phone's write woke the watch: stay out of autosleep until the
+        // notification is with lipstick (chunks of one notification extend
+        // it; the hold ends by itself 5 s after the last chunk)
+        WakeHold::hold();
 
         mService->setMtu(optionMtu(options));
         mReader.addData(value);
@@ -230,6 +236,13 @@ public slots:
             } else
                 mReader.clear();
         }
+
+        // Posted (or closed): a short grace for lipstick's feedback (ngfd)
+        // and mce's display handling to take their own wakelocks
+        if(value.endsWith("</insert>"))
+            WakeHold::release(WakeHold::GRACE_NOTIFICATION_MS);
+        else if(value.endsWith("</removed>"))
+            WakeHold::release(WakeHold::GRACE_SHORT_MS);
     }
 
 private:
