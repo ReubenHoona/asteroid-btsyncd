@@ -24,6 +24,8 @@ pkg_check_modules(AmberMpris ambermpris6 REQUIRED IMPORTED_TARGET)
 pkg_check_modules(MLITE mlite6 REQUIRED IMPORTED_TARGET)
 pkg_check_modules(KEEPALIVE keepalive REQUIRED IMPORTED_TARGET)
 pkg_check_modules(PulseSimple libpulse-simple IMPORTED_TARGET)
+pkg_check_modules(MKCAL libmkcal-qt6 IMPORTED_TARGET)
+pkg_check_modules(KCALCORE KF6CalendarCore IMPORTED_TARGET)
 
 add_subdirectory(src)
 

@@ -66,6 +66,13 @@ target_link_libraries(
 		PkgConfig::KEEPALIVE
 )
 
+# The phone's calendar goes to mkcal (without it there is no calendar service)
+if(MKCAL_FOUND AND KCALCORE_FOUND)
+	target_sources(asteroid-btsyncd PRIVATE calendarservice.cpp calendarservice.h)
+	target_compile_definitions(asteroid-btsyncd PRIVATE BTSYNCD_HAVE_CALENDAR)
+	target_link_libraries(asteroid-btsyncd PRIVATE PkgConfig::MKCAL PkgConfig::KCALCORE)
+endif()
+
 # The microphone for voice replies (without it only WAV test sources work)
 if(PulseSimple_FOUND)
 	target_compile_definitions(asteroid-btsyncd PRIVATE BTSYNCD_HAVE_PULSE)
