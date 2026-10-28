@@ -230,7 +230,16 @@ public:
     // Find my phone (see NotificationsDBusApi::FindPhone)
     bool findPhone(bool start);
     bool findingPhone() const { return mFindingPhone; }
+    // The phone is there: connected (BlueZ) and subscribed to the feedback
     bool phoneConnected() const;
+    // The BlueZ link (BlueZManager): BlueZ keeps a bonded phone's subscriptions
+    // over a disconnection, without StopNotify (and without StartNotify when it
+    // is back), so the subscription alone does not say the phone is gone. Until
+    // this is called (the tests), the subscription decides.
+    void setLinkConnected(bool connected);
+    // After the link is back: the phone has set itself up again by then (service
+    // discovery, its subscriptions): queued dismissals are sent
+    static const int PhoneSetupMs = 5000;
     // The phone stopped ringing (found there, or its time ran out)
     void phoneStoppedRinging();
 
@@ -261,6 +270,8 @@ private:
     void setFindingPhone(bool ringing);
     void closeNow(uint lipstickId);
     void flushQueuedDismissals();
+    // phoneConnected() changed: signal, and what waited for the phone after flushDelayMs
+    void updatePhoneConnected(int flushDelayMs);
     static uint contentHash(const QString &summary, const QString &body);
 
     NotificationsFeedbackChrc *mFeedback;
@@ -274,6 +285,9 @@ private:
     QDBusServiceWatcher *mLipstickWatcher = nullptr;
     QTimer *mFindPhoneTimeout = nullptr;
     bool mFindingPhone = false;
+    bool mLinkKnown = false;
+    bool mLink = false;
+    bool mPhoneConnected = false;
     int mMtu = 23;
     bool mDoNotDisturb = false;
 

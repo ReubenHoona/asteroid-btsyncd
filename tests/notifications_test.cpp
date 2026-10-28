@@ -21,6 +21,12 @@
  *   - app icons: stored as SVG, used by name, bad icons refused
  *   - a dismiss while no phone is subscribed waits for it; its resync does
  *     not bring the card back
+ *   - the same while the link is gone but BlueZ kept the subscription (a
+ *     bonded phone): sent after the phone's setup once the link is back
+ *   - framing: writes joined until the closing tag (also split inside it, as
+ *     long-write chunks with offsets, two messages in one write); the rest of
+ *     a write lost at a disconnection or followed by a new message is dropped
+ *     and the next notification still comes
  */
 
 #include "notificationservice.h"
@@ -140,6 +146,17 @@ static void write(QDBusConnection &driver, const QByteArray &value)
 {
     QVariantMap options;
     options.insert("mtu", 185);
+    const QDBusMessage r = gattCall(driver, CHR_UPDATE, "WriteValue", {value, options});
+    CHECK(r.type() == QDBusMessage::ReplyMessage);
+}
+
+// One chunk of a long write (BlueZ passes its offset)
+static void writeAt(QDBusConnection &driver, const QByteArray &value, int offset)
+{
+    QVariantMap options;
+    options.insert("mtu", 185);
+    if(offset)
+        options.insert("offset", (quint16) offset);
     const QDBusMessage r = gattCall(driver, CHR_UPDATE, "WriteValue", {value, options});
     CHECK(r.type() == QDBusMessage::ReplyMessage);
 }
@@ -545,12 +562,83 @@ int main(int argc, char **argv)
     CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }, 4000));
     CHECK(collector.feedback == "<action><id>90</id><ty>dismiss</ty></action>");
 
+    // The link goes, BlueZ keeps the subscription (a bonded phone out of range):
+    // a dismiss waits as well, and goes out once the phone is back and set up
+    service.setLinkConnected(true);
+    CHECK(service.phoneConnected());
+    write(driver, "<insert><id>91</id><vb>none</vb><an>Mail</an><su>Ida</su><bo>Hi</bo></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 16; }));
+    uint ida = 0;
+    {
+        QMutexLocker l(&fake.lock);
+        ida = fake.nextId - 1;
+    }
+    service.setLinkConnected(false);
+    CHECK(!service.phoneConnected());
+    collector.feedback.clear();
+    {
+        QDBusMessage s = QDBusMessage::createSignal("/org/freedesktop/Notifications", "org.freedesktop.Notifications", "NotificationClosed");
+        s << ida << 2u;
+        fakeConn.send(s);
+    }
+    spin(300);
+    CHECK(collector.feedback.isEmpty());
+    service.setLinkConnected(true);
+    CHECK(service.phoneConnected());
+    spin(1000);
+    CHECK(collector.feedback.isEmpty());   // the phone is still setting itself up
+    CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }, NotificationService::PhoneSetupMs + 3000));
+    CHECK(collector.feedback == "<action><id>91</id><ty>dismiss</ty></action>");
+
+    // Framing. Split inside the closing tag: still posted
+    int count = postedCount(fake);
+    write(driver, "<insert><id>95</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Split</bo></ins");
+    spin(200);
+    CHECK(postedCount(fake) == count);
+    write(driver, "ert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 1; }));
+    CHECK(lastPosted(fake).summary == "Lee");
+    CHECK(lastPosted(fake).body == "Split");
+    // A long write: chunks with offsets, the second starting with a child element
+    {
+        const QByteArray xml = "<insert><id>96</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Chunks</bo><rs>1</rs></insert>";
+        writeAt(driver, xml.left(40), 0);
+        writeAt(driver, xml.mid(40, 30), 40);
+        writeAt(driver, xml.mid(70), 70);
+        CHECK(waitFor([&] { return postedCount(fake) == count + 2; }));
+        CHECK(lastPosted(fake).body == "Chunks");
+    }
+    // The rest of a write never came (the phone went mid-write), then a new
+    // notification: the stale part is dropped, the new one comes as it is
+    write(driver, "<insert><id>97</id><vb>none</vb><an>Mail</an><su>Lost</su>");
+    write(driver, "<insert><id>98</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Sent while away</bo><rs>1</rs></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 3; }));
+    CHECK(lastPosted(fake).summary == "Lee");
+    CHECK(lastPosted(fake).body == "Sent while away");
+    spin(200);
+    CHECK(postedCount(fake) == count + 3);
+    // ... also when the disconnection is all that tells
+    write(driver, "<insert><id>99</id><vb>none</vb><an>Mail</an><su>Cut</su>");
+    service.setLinkConnected(false);
+    service.setLinkConnected(true);
+    write(driver, "<bo>tail</bo></insert>");   // the end of the cut one: not a notification
+    write(driver, "<insert><id>100</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Next</bo></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 4; }));
+    CHECK(lastPosted(fake).body == "Next");
+    spin(200);
+    CHECK(postedCount(fake) == count + 4);
+    // Two messages in one write, and whitespace between writes
+    write(driver, "<insert><id>101</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>One</bo></insert>\n"
+                  "<removed><id>100</id></removed>\n");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 5; }));
+    CHECK(lastPosted(fake).body == "One");
+
     // A reply from the watch, as on Wear OS: the text goes to the phone and
     // the card stays; the phone's update with the reply replaces it in
     // place without an alert; the next message alerts again
     {
-        const char *kimFirst = "<insert><id>95</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
-                               "<bo>are you coming?</bo><ac>reply,open</ac><th>c0ffee09</th>"
+        const char *kimFirst = "<insert><id>195</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
+                               "<bo>are you coming?</bo><ac>reply,open</ac><th>c0ffee19</th>"
                                "<ms><m><s>Kim</s><t>are you coming?</t></m></ms></insert>";
         before = postedCount(fake);
         write(driver, kimFirst);
@@ -569,7 +657,7 @@ int main(int argc, char **argv)
         const QDBusMessage r = driver.call(m, QDBus::BlockWithGui, 5000);
         CHECK(r.type() == QDBusMessage::ReplyMessage && r.arguments().value(0).toBool());
         CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
-        CHECK(collector.feedback == "<action><id>95</id><ty>reply</ty><tx>OK</tx></action>");
+        CHECK(collector.feedback == "<action><id>195</id><ty>reply</ty><tx>OK</tx></action>");
         // the phone wrote with an MTU of 185: one notification
         CHECK(collector.largestPiece == collector.feedback.size());
         // a long reply (a voice one) whole, in pieces of at most MTU - 3
@@ -580,7 +668,7 @@ int main(int argc, char **argv)
         m2 << kim << longText;
         CHECK(driver.call(m2, QDBus::BlockWithGui, 5000).arguments().value(0).toBool());
         CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
-        CHECK(QString::fromUtf8(collector.feedback) == QStringLiteral("<action><id>95</id><ty>reply</ty><tx>") + longText.trimmed() + QStringLiteral("</tx></action>"));
+        CHECK(QString::fromUtf8(collector.feedback) == QStringLiteral("<action><id>195</id><ty>reply</ty><tx>") + longText.trimmed() + QStringLiteral("</tx></action>"));
         CHECK(collector.largestPiece <= 182 && collector.feedback.size() > 182);
         spin(300);
         {
@@ -588,8 +676,8 @@ int main(int argc, char **argv)
             CHECK(fake.closed.size() == closedNow);
         }
         // the phone's update, with the reply
-        write(driver, "<insert><id>95</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
-                      "<bo>OK</bo><ac>reply,open</ac><th>c0ffee09</th>"
+        write(driver, "<insert><id>195</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
+                      "<bo>OK</bo><ac>reply,open</ac><th>c0ffee19</th>"
                       "<ms><m><s>Kim</s><t>are you coming?</t></m><m><s>Me</s><t>OK</t></m></ms></insert>");
         CHECK(waitFor([&] { return postedCount(fake) == before + 2; }));
         {
@@ -602,8 +690,8 @@ int main(int argc, char **argv)
             CHECK(fake.closed.size() == closedNow);
         }
         // Kim answers: a banner and a vibration again
-        write(driver, "<insert><id>95</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
-                      "<bo>great</bo><ac>reply,open</ac><th>c0ffee09</th>"
+        write(driver, "<insert><id>195</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
+                      "<bo>great</bo><ac>reply,open</ac><th>c0ffee19</th>"
                       "<ms><m><s>Kim</s><t>are you coming?</t></m><m><s>Me</s><t>OK</t></m>"
                       "<m><s>Kim</s><t>great</t></m></ms></insert>");
         CHECK(waitFor([&] { return postedCount(fake) == before + 3; }));

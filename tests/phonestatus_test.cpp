@@ -7,8 +7,11 @@
  *     the notification service follows the DND
  *   - the watch's DND to the phone; switched while no phone listened: sent
  *     when it listens again, and the phone's older state does not undo it
- *   - the quiet "Phone disconnected" card after the phone is gone a while,
- *     closed when it is back
+ *   - a bonded phone out of range (BlueZ keeps its subscriptions, the link
+ *     goes): disconnected, no card (Wear OS); the watch's DND waits and goes
+ *     out after the phone's setup when it is back
+ *   - the quiet "Phone disconnected" card (opt-in) after the phone is gone a
+ *     while, closed when it is back
  */
 
 #include "phonestatusservice.h"
@@ -214,14 +217,53 @@ int main(int argc, char **argv)
     spin(200);
     CHECK(api(driver, "DoNotDisturb").toBool() == false);
 
-    // The phone goes away: after a while a quiet card, gone when it is back
+    // A bonded phone goes out of range: BlueZ keeps its subscriptions (no
+    // StopNotify), the link says it is gone. Like Wear OS: no card.
+    phone.setDisconnectNoticeEnabled(false);
+    collector.requests.clear();
+    int changes = collector.connectedChanges.size();
+    int cards = 0;
+    {
+        QMutexLocker l(&fake.lock);
+        cards = fake.summaries.size();
+    }
+    notifications.setLinkConnected(true);   // the link is known from now on
+    spin(100);
+    CHECK(collector.connectedChanges.size() == changes);   // it was there already
+    notifications.setLinkConnected(false);
+    CHECK(waitFor([&] { return collector.connectedChanges.size() == changes + 1; }));
+    CHECK(collector.connectedChanges.last() == false);
+    CHECK(api(driver, "Connected").toBool() == false);
+    // the watch's DND meanwhile is not sent into the void
+    CHECK(api(driver, "SetDoNotDisturb", {true}).toBool() == false);
+    spin(1200);   // longer than the notice delay of this test
+    CHECK(collector.requests.isEmpty());
+    {
+        QMutexLocker l(&fake.lock);
+        CHECK(fake.summaries.size() == cards);
+    }
+    // Back with the same subscription: connected; the DND after the phone's setup
+    notifications.setLinkConnected(true);
+    CHECK(waitFor([&] { return collector.connectedChanges.size() == changes + 2; }));
+    CHECK(collector.connectedChanges.last() == true);
+    CHECK(api(driver, "Connected").toBool() == true);
+    spin(500);
+    CHECK(collector.requests.isEmpty());
+    CHECK(waitFor([&] { return collector.requests.endsWith("</req>"); }, NotificationService::PhoneSetupMs + 3000));
+    CHECK(collector.requests == "<req><dnd>on</dnd></req>");
+    writeStatus(driver, "<ps><dnd>priority</dnd></ps>");   // the phone follows
+    spin(200);
+    CHECK(api(driver, "DoNotDisturb").toBool() == true);
+
+    // The phone goes away (opt-in notice): after a while a quiet card, gone when it is back
+    phone.setDisconnectNoticeEnabled(true);
     int notified = 0;
     {
         QMutexLocker l(&fake.lock);
         notified = fake.summaries.size();
     }
     CHECK(gattCall(driver, CHR_FEEDBACK, "StopNotify", {}).type() == QDBusMessage::ReplyMessage);
-    CHECK(waitFor([&] { return collector.connectedChanges.size() == 2; }));
+    CHECK(waitFor([&] { return collector.connectedChanges.size() == changes + 3; }));
     CHECK(collector.connectedChanges.last() == false);
     spin(300);
     {

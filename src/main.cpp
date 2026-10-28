@@ -51,6 +51,10 @@ int main(int argc, char **argv)
     Application app;
     Advertisement advert;
     BlueZManager bm(app.getPath(), advert.getPath());
+    // Whether the phone is there follows BlueZ's connection (see
+    // NotificationService::setLinkConnected)
+    QObject::connect(&bm, &BlueZManager::connectedChanged, &app, [&app, &bm] { app.setPhoneLink(bm.connected()); });
+    app.setPhoneLink(bm.connected());
 
     qcoreapp.exec();
     return 0;

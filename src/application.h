@@ -26,6 +26,8 @@
 #include "service.h"
 #include "common.h"
 
+class NotificationService;
+
 typedef QMap<QString, QVariantMap> InterfaceList;
 typedef QMap<QDBusObjectPath, InterfaceList> ManagedObjectList;
 Q_DECLARE_METATYPE(InterfaceList)
@@ -40,9 +42,12 @@ public:
     Application(QDBusConnection bus = QDBusConnection::systemBus(), QObject *parent = 0);
     QDBusObjectPath getPath();
     void addService(Service *service);
+    // The phone's BLE link (BlueZManager), for the services
+    void setPhoneLink(bool connected);
 
 private:
     QString mPath;
+    NotificationService *mNotifications = nullptr;
     QList<Service *> mServices;
 
 public slots:
