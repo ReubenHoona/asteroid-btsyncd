@@ -25,6 +25,7 @@
 #include "healthservice.h"
 #include "voiceservice.h"
 #include "phonestatusservice.h"
+#include "assistantservice.h"
 #ifdef BTSYNCD_HAVE_CALENDAR
 #include "calendarservice.h"
 #endif
@@ -50,6 +51,9 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
 #endif
     // The phone's battery and Do Not Disturb (protocol version 4)
     addService(new PhoneStatusService(9, bus, notifications));
+    // Questions of the assistant (asteroid-assistant), relayed by the
+    // phone to the answer server set there
+    addService(new AssistantService(10, bus));
 
     qDBusRegisterMetaType<InterfaceList>();
     qDBusRegisterMetaType<ManagedObjectList>();

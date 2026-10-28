@@ -47,6 +47,7 @@
 #define BTSYNCD_VOICE_IFACE          "org.asteroidos.btsyncd.Voice"
 #define BTSYNCD_PHONE_PATH           "/org/asteroidos/btsyncd/phone"
 #define BTSYNCD_PHONE_IFACE          "org.asteroidos.btsyncd.Phone"
+#define BTSYNCD_ASSISTANT_PATH       "/org/asteroidos/btsyncd/assistant"
 #define SCREENSHOT_SERVICE_NAME      "org.nemomobile.lipstick"
 #define SCREENSHOT_MAIN_IFACE        "org.nemomobile.lipstick"
 #define SCREENSHOT_PATH_BASE         "/org/nemomobile/lipstick/screenshot"
@@ -104,5 +105,10 @@
 #define PHONE_STATUS_UUID "0000C001-0000-0000-0000-00A57E401D05"
 #define PHONE_REQ_UUID    "0000C002-0000-0000-0000-00A57E401D05"
 #define PHONE_CAP_UUID    "0000C003-0000-0000-0000-00A57E401D05"
+
+#define ASSISTANT_UUID         "0000D071-0000-0000-0000-00A57E401D05"
+#define ASSISTANT_REQUEST_UUID "0000D001-0000-0000-0000-00A57E401D05"
+#define ASSISTANT_REPLY_UUID   "0000D002-0000-0000-0000-00A57E401D05"
+#define ASSISTANT_CAP_UUID     "0000D003-0000-0000-0000-00A57E401D05"
 
 #endif // COMMON_H
