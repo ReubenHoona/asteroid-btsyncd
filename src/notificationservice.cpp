@@ -101,6 +101,9 @@ QByteArray NotificationService::capabilities()
         "<importance>1</importance><alarm>1</alarm>"
         "<icons>" + QByteArray::number(IconSize) + "</icons>"
         "<iconcache>" + iconCacheToken().toLatin1() + "</iconcache>"
+        // Each insert's notification key (<ky>), and the phone's whole list after a
+        // resync (<sync>): a notification keeps its card, a removed one goes
+        "<sync>1</sync>"
         "</capabilities>";
 }
 
@@ -157,6 +160,8 @@ PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
             n.smartReplies = readTextList(reader, "r", MaxSmartReplies, 120);
         else if(name == QLatin1String("th"))
             n.thread = reader.readElementText().trimmed().left(64);
+        else if(name == QLatin1String("ky"))
+            n.key = reader.readElementText().trimmed().left(64);
         else if(name == QLatin1String("ms"))
             n.messages = readMessages(reader);
         else if(name == QLatin1String("pr"))
@@ -366,6 +371,7 @@ static QString describe(const PhoneNotification &n, int bytes)
     if(!n.category.isEmpty()) flags << "category " + n.category;
     if(!n.iconHash.isEmpty()) flags << "icon";
     if(!n.phoneActions.isEmpty()) flags << "actions " + n.phoneActions.join(',');
+    if(!n.key.isEmpty()) flags << "key";
     return QString("Phone notification %1: insert (%2 bytes) from %3, title %4 chars, body %5 chars, vibration %6%7")
         .arg(n.id).arg(bytes).arg(n.packageName.isEmpty() ? QStringLiteral("?") : n.packageName)
         .arg(n.summary.size()).arg(n.body.size())
@@ -378,7 +384,7 @@ class NotificationsUpdateChrc : public Characteristic
 public:
     NotificationsUpdateChrc(QDBusConnection bus, unsigned int index, NotificationService *service)
       : Characteristic(bus, index, NOTI_UPD_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
-        mJoiner("Notifications", {"insert", "removed", "findphone"}, MaxUpdateBytes)
+        mJoiner("Notifications", {"insert", "removed", "findphone", "sync"}, MaxUpdateBytes)
     {
         // A write cut by the disconnection never ends: the next connection starts afresh
         QObject::connect(service, &NotificationService::phoneConnectedChanged, this, [this](bool connected) {
@@ -424,6 +430,26 @@ public slots:
                 qInfo() << "Phone notification" << id << ": removed on the phone";
                 mService->removed(id);
                 removed = true;
+            } else if(message.first == "sync") {
+                // <sync><n><id>ID</id><ky>KEY</ky></n>...</sync>: the phone's notifications
+                QSet<int> ids;
+                QSet<QString> keys;
+                while(reader.readNextStartElement()) {
+                    if(reader.name() != QLatin1String("n")) {
+                        reader.skipCurrentElement();
+                        continue;
+                    }
+                    while(reader.readNextStartElement()) {
+                        if(reader.name() == QLatin1String("id")) ids.insert(reader.readElementText().toInt());
+                        else if(reader.name() == QLatin1String("ky")) keys.insert(reader.readElementText().trimmed());
+                        else reader.skipCurrentElement();
+                    }
+                }
+                if(reader.hasError()) {
+                    qWarning() << "Notifications: the phone's list could not be read:" << reader.errorString();
+                    continue;
+                }
+                mService->sync(ids, keys);
             } else if(message.first == "findphone") {
                 // Version 3: <findphone>stop</findphone>, the phone stopped
                 // ringing (found there, or its time ran out)
@@ -718,6 +744,7 @@ void NotificationService::restoreKnown()
     QHash<uint, QList<QVariant>> callNotify;
     QHash<uint, QString> timestamps;
     QHash<uint, QString> threads;
+    QHash<uint, QString> keyHashes;
     QHash<uint, uint> contents;
     QList<uint> duplicates;
     int listed = 0;
@@ -752,6 +779,7 @@ void NotificationService::restoreKnown()
                                                             << body << actions << hints << timeout);
         timestamps.insert(lipstickId, hints.value("x-nemo-timestamp").toString());
         threads.insert(lipstickId, hints.value(ThreadHint).toString());
+        keyHashes.insert(lipstickId, hints.value(KeyHint).toString());
         contents.insert(lipstickId, contentHash(summary, body));
     }
     arg.endArray();
@@ -768,7 +796,7 @@ void NotificationService::restoreKnown()
     for(auto it = found.constBegin(); it != found.constEnd(); ++it) {
         mKnownAndroidNotifs.insert(it.key(), it.value());
         remember(it.value(), phoneActions.value(it.value()), callNotify.value(it.value()),
-                 threads.value(it.value()), contents.value(it.value()));
+                 threads.value(it.value()), contents.value(it.value()), keyHashes.value(it.value()));
         setTimestamp(it.value(), timestamps.value(it.value()));
     }
     static QDBusInterface notifyApp(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE, NOTIFICATIONS_MAIN_IFACE);
@@ -960,8 +988,17 @@ bool NotificationService::silence(uint notificationId)
 
 void NotificationService::remember(uint notificationId, const QStringList &phoneActions,
                                    const QList<QVariant> &callNotify, const QString &thread,
-                                   uint content)
+                                   uint content, const QString &key)
 {
+    const QString oldKey = mKeyOf.value(notificationId);
+    if(!oldKey.isEmpty() && oldKey != key && mKeys.value(oldKey) == notificationId)
+        mKeys.remove(oldKey);
+    if(key.isEmpty()) {
+        mKeyOf.remove(notificationId);
+    } else {
+        mKeyOf.insert(notificationId, key);
+        mKeys.insert(key, notificationId);
+    }
     mPhoneActions.insert(notificationId, phoneActions);
     if(callNotify.isEmpty())
         mCallNotify.remove(notificationId);
@@ -990,6 +1027,10 @@ void NotificationService::forget(uint notificationId)
     const QString thread = mThreadOf.take(notificationId);
     if(!thread.isEmpty() && mThreads.value(thread) == notificationId)
         mThreads.remove(thread);
+    const QString key = mKeyOf.take(notificationId);
+    if(!key.isEmpty() && mKeys.value(key) == notificationId)
+        mKeys.remove(key);
+    mPostedAt.remove(notificationId);
 }
 
 QString NotificationService::callTimestamp(uint notificationId) const
@@ -1040,6 +1081,21 @@ void NotificationService::post(const PhoneNotification &n)
             mKnownAndroidNotifs.insert(id, replacesId);
         }
     }
+    // The same phone notification under another phone id (a resync after the phone forgot
+    // the id the watch knows it by): its card, updated in place
+    if(!replacesId && !n.key.isEmpty()) {
+        replacesId = mKeys.value(n.key, 0);
+        if(replacesId) {
+            qInfo().noquote() << QString("Phone notification %1: the card of the same phone notification is %2").arg(id).arg(replacesId);
+            for(auto it = mKnownAndroidNotifs.begin(); it != mKnownAndroidNotifs.end(); ) {
+                if(it.value() == replacesId)
+                    it = mKnownAndroidNotifs.erase(it);
+                else
+                    ++it;
+            }
+            mKnownAndroidNotifs.insert(id, replacesId);
+        }
+    }
     // A card about to close (removed a moment ago) stays: re-posted
     mPendingClose.remove(replacesId);
 
@@ -1065,6 +1121,8 @@ void NotificationService::post(const PhoneNotification &n)
     hints.insert(PhoneIdHint, QString::number(id));
     if(!n.thread.isEmpty())
         hints.insert(ThreadHint, n.thread);
+    if(!n.key.isEmpty())
+        hints.insert(KeyHint, n.key);
     if(!n.category.isEmpty())
         hints.insert(CategoryHint, n.category);
 
@@ -1180,7 +1238,8 @@ void NotificationService::post(const PhoneNotification &n)
                    << (reply.type() == QDBusMessage::ErrorMessage ? reply.errorMessage() : QString());
     if(lipstickId) {
         argumentList[1] = lipstickId;
-        remember(lipstickId, n.phoneActions, isCall ? argumentList : QList<QVariant>(), n.thread, content);
+        remember(lipstickId, n.phoneActions, isCall ? argumentList : QList<QVariant>(), n.thread, content, n.key);
+        mPostedAt.insert(lipstickId, QDateTime::currentMSecsSinceEpoch());
         // lipstick stamps a notification without a timestamp hint with the
         // current time, also when it replaces one
         const QString stamped = hints.value("x-nemo-timestamp").toString();
@@ -1216,6 +1275,33 @@ void NotificationService::removed(int phoneId)
         return;
     }
     closeNow(lipstickId);
+}
+
+void NotificationService::sync(const QSet<int> &phoneIds, const QSet<QString> &keys)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QList<int> stale;
+    for(auto it = mKnownAndroidNotifs.constBegin(); it != mKnownAndroidNotifs.constEnd(); ++it) {
+        const uint lipstickId = it.value();
+        if(phoneIds.contains(it.key()))
+            continue;
+        const QString key = mKeyOf.value(lipstickId);
+        if(!key.isEmpty() && keys.contains(key))
+            continue;       // the same notification under another phone id: its next insert matches
+        // Not the phone's notification list: a call, find my watch
+        if(mCallNotify.contains(lipstickId) || mPhoneActions.value(lipstickId).contains("found"))
+            continue;
+        // Posted while the list was on its way
+        if(now - mPostedAt.value(lipstickId, 0) < mSyncGraceMs)
+            continue;
+        stale << it.key();
+    }
+    qInfo().noquote() << QString("Phone notifications: the phone has %1, the watch %2 cards, %3 removed on the phone while it was away")
+            .arg(phoneIds.size()).arg(mKnownAndroidNotifs.size()).arg(stale.size());
+    for(const int phoneId : stale) {
+        qInfo().noquote() << QString("Phone notification %1: not on the phone any more, closed").arg(phoneId);
+        removed(phoneId);
+    }
 }
 
 void NotificationService::closeNow(uint lipstickId)

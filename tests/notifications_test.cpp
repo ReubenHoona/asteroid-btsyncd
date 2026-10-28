@@ -23,6 +23,9 @@
  *     not bring the card back
  *   - the same while the link is gone but BlueZ kept the subscription (a
  *     bonded phone): sent after the phone's setup once the link is back
+ *   - keys: the same phone notification under a new phone id updates its card;
+ *     the phone's list after a resync (<sync>) closes the cards not in it
+ *     (not ones posted meanwhile), also in several writes
  *   - framing: writes joined until the closing tag (also split inside it, as
  *     long-write chunks with offsets, two messages in one write); the rest of
  *     a write lost at a disconnection or followed by a new message is dropped
@@ -215,6 +218,7 @@ int main(int argc, char **argv)
         const QByteArray caps = r.arguments().value(0).toByteArray();
         CHECK(caps.contains("<version>4</version>"));
         CHECK(caps.contains("<findphone>1</findphone>"));
+        CHECK(caps.contains("<sync>1</sync>"));
         CHECK(caps.contains("found"));
     }
 
@@ -704,6 +708,61 @@ int main(int argc, char **argv)
             CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_normal");
         }
     }
+
+    // Keys: "Jo: Coffee?" sent again under a new phone id (a resync after the phone
+    // forgot the id) updates its card instead of a second one
+    count = postedCount(fake);
+    uint jo = 0, max = 0, ann = 0;
+    write(driver, "<insert><id>300</id><vb>none</vb><an>Notitest</an><su>Jo</su><bo>Coffee?</bo><ky>00000000000000aa</ky></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 1; }));
+    {
+        QMutexLocker l(&fake.lock);
+        jo = fake.nextId - 1;
+    }
+    write(driver, "<insert><id>301</id><vb>none</vb><an>Notitest</an><su>Jo</su><bo>Coffee?</bo><ky>00000000000000aa</ky><rs>1</rs></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 2; }));
+    CHECK(lastPosted(fake).replacesId == jo);
+    // "Max", a card without a key; the phone's list has only Jo (under its new id): Max goes
+    write(driver, "<insert><id>302</id><vb>none</vb><an>Notitest</an><su>Max</su><bo>Dinner tonight?</bo></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 3; }));
+    {
+        QMutexLocker l(&fake.lock);
+        max = fake.nextId - 1;
+    }
+    service.setSyncGraceMs(0);
+    write(driver, "<sync><n><id>301</id><ky>00000000000000aa</ky></n></sync>");
+    CHECK(waitFor([&] { QMutexLocker l(&fake.lock); return fake.closed.contains(max); }));
+    spin(300);
+    {
+        QMutexLocker l(&fake.lock);
+        CHECK(!fake.closed.contains(jo));
+    }
+    // A card posted while the list was on its way stays
+    service.setSyncGraceMs(60000);
+    write(driver, "<insert><id>303</id><vb>none</vb><an>Notitest</an><su>Ann</su><bo>New</bo></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 4; }));
+    {
+        QMutexLocker l(&fake.lock);
+        ann = fake.nextId - 1;
+    }
+    write(driver, "<sync><n><id>301</id><ky>00000000000000aa</ky></n></sync>");
+    spin(500);
+    {
+        QMutexLocker l(&fake.lock);
+        CHECK(!fake.closed.contains(ann));
+    }
+    // ... and goes with a later list that does not have it, here in two writes
+    service.setSyncGraceMs(0);
+    write(driver, "<sync><n><id>30");
+    write(driver, "1</id></n></sync>");
+    CHECK(waitFor([&] { QMutexLocker l(&fake.lock); return fake.closed.contains(ann); }));
+    // Jo stays (by its id now), and its removal under the new id closes it
+    {
+        QMutexLocker l(&fake.lock);
+        CHECK(!fake.closed.contains(jo));
+    }
+    write(driver, "<removed><id>301</id></removed>");
+    CHECK(waitFor([&] { QMutexLocker l(&fake.lock); return fake.closed.contains(jo); }));
 
     // The decisions on their own
     {

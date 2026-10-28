@@ -48,6 +48,9 @@ struct PhoneNotification
     bool resync = false;
     // Version 4
     QString thread;
+    // The phone notification's identity (a hash of Android's notification key): the
+    // same card whatever phone id it comes with
+    QString key;
     QList<QPair<QString, QString>> messages;   // sender, text; oldest first
     int importance = 0;                         // Android's 1 (min) .. 5 (max), 0 unknown
     bool onlyAlertOnce = false;
@@ -185,6 +188,7 @@ public:
     static constexpr const char *PhoneIdHint = "x-asteroid-phone-id";
     // Version 4: the conversation's key, and the Android category
     static constexpr const char *ThreadHint = "x-asteroid-thread";
+    static constexpr const char *KeyHint = "x-asteroid-phone-key";
     static constexpr const char *CategoryHint = "x-asteroid-category";
     // A card the phone removed closes this much later (see removed())
     static const int CloseDelayMs = 1500;
@@ -210,6 +214,12 @@ public:
     // A notification from the phone, and its removal
     void post(const PhoneNotification &n);
     void removed(int phoneId);
+    // After a resync, every notification the phone has (phone id, key hash): the cards of
+    // phone notifications in neither list were removed while the phone was away and go
+    // (not calls, find my watch, or cards posted in the last syncGraceMs)
+    void sync(const QSet<int> &phoneIds, const QSet<QString> &keys);
+    void setSyncGraceMs(int ms) { mSyncGraceMs = ms; }
+    static const int SyncGraceMs = 60 * 1000;
 
     // Do Not Disturb (the watch's, synced with the phone's by the phone
     // status service): phone notifications come without banner or vibration,
@@ -260,7 +270,7 @@ public:
     // call the Notify arguments it was shown with (to update it)
     void remember(uint notificationId, const QStringList &phoneActions,
                   const QList<QVariant> &callNotify, const QString &thread = QString(),
-                  uint content = 0);
+                  uint content = 0, const QString &key = QString());
     void forget(uint notificationId);
     QString callTimestamp(uint notificationId) const;
 
@@ -299,6 +309,12 @@ private:
     QHash<QString, uint> mThreads;
     QHash<uint, QString> mThreadOf;
     QHash<uint, uint> mContent;
+    // The card of each phone notification by its key (and back), and when each card
+    // was last posted (a card newer than the phone's list is not dropped by it)
+    QHash<QString, uint> mKeys;
+    QHash<uint, QString> mKeyOf;
+    QHash<uint, qint64> mPostedAt;
+    int mSyncGraceMs = SyncGraceMs;
     // lipstick id -> when the watch replied to it
     QHash<uint, qint64> mRepliedAt;
     // Cards the phone removed, closed a moment later: a conversation the app
