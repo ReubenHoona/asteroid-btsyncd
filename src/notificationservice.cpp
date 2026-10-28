@@ -38,6 +38,8 @@
 #include <QTimer>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
+#include <cctype>
+#include <utility>
 
 // Actions the phone may offer in <ac>, with the button text the watch shows.
 // dismiss needs no button: it is the watch's own dismiss.
@@ -233,11 +235,137 @@ static int optionMtu(const QVariantMap &options)
     return options.contains("mtu") ? options.value("mtu").toInt() : 0;
 }
 
+static int optionOffset(const QVariantMap &options)
+{
+    return options.value("offset", 0).toInt();
+}
+
+/*
+ * The phone's writes to one characteristic, joined until the closing tag of
+ * each root element: the protocol allows any split (a long write comes as
+ * chunks, the last one may end inside the closing tag), and a write may hold
+ * more than one message. A new message (one of the characteristic's root
+ * elements, at offset 0) while the last one is incomplete means the rest of
+ * that one was lost (a disconnection): it is dropped, as is more than
+ * maxBytes without an end. Text cannot contain the closing tag (XML escapes
+ * '<'), and the protocol nests no root element in another.
+ */
+class MessageJoiner
+{
+public:
+    MessageJoiner(const char *what, QList<QByteArray> roots, int maxBytes)
+        : mWhat(what), mRoots(std::move(roots)), mMax(maxBytes) {}
+
+    // The complete messages after this write: (root element name, bytes)
+    QList<QPair<QByteArray, QByteArray>> add(const QByteArray &value, int offset)
+    {
+        if(!mBuffer.isEmpty() && offset == 0 && startsMessage(value))
+            drop("a new message began");
+        mBuffer += value;
+        QList<QPair<QByteArray, QByteArray>> messages;
+        for(;;) {
+            const int lt = mBuffer.indexOf('<');
+            if(lt < 0) {
+                if(!mBuffer.trimmed().isEmpty())
+                    drop("no element");
+                mBuffer.clear();
+                break;
+            }
+            if(lt > 0) {
+                if(!mBuffer.left(lt).trimmed().isEmpty())
+                    qWarning().noquote() << QString("%1: dropped %2 bytes before an element").arg(mWhat).arg(lt);
+                mBuffer.remove(0, lt);
+            }
+            int i = 1;
+            while(i < mBuffer.size() && (isalnum((unsigned char) mBuffer.at(i)) || mBuffer.at(i) == '_' || mBuffer.at(i) == '-'))
+                i++;
+            if(i >= mBuffer.size())
+                break;          // the name is still coming
+            if(i == 1) {
+                // not an element start ("</x>" left of a lost message, "<?", "<!")
+                const int next = mBuffer.indexOf('<', 1);
+                qWarning().noquote() << QString("%1: dropped %2 bytes of a stray tag").arg(mWhat).arg(next < 0 ? mBuffer.size() : next);
+                if(next < 0) {
+                    mBuffer.clear();
+                    break;
+                }
+                mBuffer.remove(0, next);
+                continue;
+            }
+            const QByteArray name = mBuffer.mid(1, i - 1);
+            const QByteArray close = "</" + name + ">";
+            const int c = mBuffer.indexOf(close, i);
+            if(c < 0)
+                break;          // the rest is still coming
+            const int end = c + close.size();
+            messages << qMakePair(name, mBuffer.left(end));
+            mBuffer.remove(0, end);
+        }
+        if(mBuffer.size() > mMax)
+            drop("too long without an end");
+        return messages;
+    }
+
+    // Drops an incomplete message (logged)
+    void drop(const char *why)
+    {
+        if(mBuffer.isEmpty())
+            return;
+        qWarning().noquote() << QString("%1: incomplete message of %2 bytes dropped: %3").arg(mWhat).arg(mBuffer.size()).arg(why);
+        mBuffer.clear();
+    }
+
+private:
+    bool startsMessage(const QByteArray &value) const
+    {
+        const QByteArray v = value.trimmed();
+        for(const QByteArray &root : mRoots) {
+            if(v.startsWith("<" + root + ">") || v.startsWith("<" + root + " "))
+                return true;
+        }
+        return false;
+    }
+
+    const char *mWhat;
+    QList<QByteArray> mRoots;
+    int mMax;
+    QByteArray mBuffer;
+};
+
+// What an insert says, for the log: no text, the title as its length
+static QString describe(const PhoneNotification &n, int bytes)
+{
+    QStringList flags;
+    if(n.resync) flags << "resync";
+    if(!n.thread.isEmpty()) flags << QString("thread, %1 message(s)").arg(n.messages.size());
+    if(n.importance) flags << QString("importance %1").arg(n.importance);
+    if(n.onlyAlertOnce) flags << "alert once";
+    if(n.ongoing) flags << "ongoing";
+    if(!n.category.isEmpty()) flags << "category " + n.category;
+    if(!n.iconHash.isEmpty()) flags << "icon";
+    if(!n.phoneActions.isEmpty()) flags << "actions " + n.phoneActions.join(',');
+    return QString("Phone notification %1: insert (%2 bytes) from %3, title %4 chars, body %5 chars, vibration %6%7")
+        .arg(n.id).arg(bytes).arg(n.packageName.isEmpty() ? QStringLiteral("?") : n.packageName)
+        .arg(n.summary.size()).arg(n.body.size())
+        .arg(n.vibrate.isNull() ? QStringLiteral("default") : n.vibrate)
+        .arg(flags.isEmpty() ? QString() : ", " + flags.join(", "));
+}
+
 class NotificationsUpdateChrc : public Characteristic
 {
 public:
     NotificationsUpdateChrc(QDBusConnection bus, unsigned int index, NotificationService *service)
-      : Characteristic(bus, index, NOTI_UPD_UUID, {"encrypt-authenticated-write"}, service, service), mService(service) {}
+      : Characteristic(bus, index, NOTI_UPD_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
+        mJoiner("Notifications", {"insert", "removed", "findphone"}, MaxUpdateBytes)
+    {
+        // A write cut by the disconnection never ends: the next connection starts afresh
+        QObject::connect(service, &NotificationService::phoneConnectedChanged, this, [this](bool connected) {
+            if(!connected)
+                mJoiner.drop("the phone is gone");
+        });
+    }
+
+    static const int MaxUpdateBytes = 16384;
 
 public slots:
     void WriteValue(QByteArray value, QVariantMap options)
@@ -248,49 +376,56 @@ public slots:
         WakeHold::hold();
 
         mService->setMtu(optionMtu(options));
-        mReader.addData(value);
-
-        if(value.endsWith("</insert>")) {
-            if(mReader.readNextStartElement() && mReader.name() == QLatin1String("insert")) {
-                const PhoneNotification n = PhoneNotification::parse(mReader);
-                mReader.clear();
-                mService->post(n);
-            } else
-                mReader.clear();
-        } else if(value.endsWith("</removed>")) {
-            int id = 0;
-            if(mReader.readNextStartElement() && mReader.name() == QLatin1String("removed")) {
-                while(mReader.readNextStartElement()) {
-                    if(mReader.name() == QLatin1String("id")) id = mReader.readElementText().toInt();
-                    else mReader.skipCurrentElement();
+        bool posted = false, removed = false;
+        for(const auto &message : mJoiner.add(value, optionOffset(options))) {
+            QXmlStreamReader reader(message.second);
+            if(!reader.readNextStartElement()) {
+                qWarning() << "Notifications: a message of" << message.second.size() << "bytes could not be read:" << reader.errorString();
+                continue;
+            }
+            if(message.first == "insert") {
+                const PhoneNotification n = PhoneNotification::parse(reader);
+                if(reader.hasError()) {
+                    qWarning() << "Phone notification" << n.id << ": an insert of" << message.second.size()
+                               << "bytes could not be read:" << reader.errorString();
+                    continue;
                 }
-                mReader.clear();
+                qInfo().noquote() << describe(n, message.second.size());
+                mService->post(n);
+                posted = true;
+            } else if(message.first == "removed") {
+                int id = 0;
+                while(reader.readNextStartElement()) {
+                    if(reader.name() == QLatin1String("id")) id = reader.readElementText().toInt();
+                    else reader.skipCurrentElement();
+                }
+                qInfo() << "Phone notification" << id << ": removed on the phone";
                 mService->removed(id);
-            } else
-                mReader.clear();
-        } else if(value.endsWith("</findphone>")) {
-            // Version 3: <findphone>stop</findphone>, the phone stopped
-            // ringing (found there, or its time ran out)
-            QString state;
-            if(mReader.readNextStartElement() && mReader.name() == QLatin1String("findphone"))
-                state = mReader.readElementText().trimmed();
-            mReader.clear();
-            if(state == "stop")
-                mService->phoneStoppedRinging();
+                removed = true;
+            } else if(message.first == "findphone") {
+                // Version 3: <findphone>stop</findphone>, the phone stopped
+                // ringing (found there, or its time ran out)
+                const QString state = reader.readElementText().trimmed();
+                qInfo() << "Find phone from the phone:" << state;
+                if(state == "stop")
+                    mService->phoneStoppedRinging();
+            } else {
+                qWarning() << "Notifications: unknown message" << message.first << "dropped";
+            }
         }
 
         // Posted (or closed): a short grace for lipstick's feedback (ngfd)
         // and mce's display handling to take their own wakelocks; a card
         // closed a moment later (see removed()) keeps the watch up until then
-        if(value.endsWith("</insert>"))
-            WakeHold::release(WakeHold::GRACE_NOTIFICATION_MS);
-        else if(value.endsWith("</removed>"))
+        if(removed)
             WakeHold::release(NotificationService::CloseDelayMs + WakeHold::GRACE_SHORT_MS);
+        else if(posted)
+            WakeHold::release(WakeHold::GRACE_NOTIFICATION_MS);
     }
 
 private:
     NotificationService *mService;
-    QXmlStreamReader mReader;
+    MessageJoiner mJoiner;
 };
 
 /*
@@ -304,40 +439,44 @@ class NotificationsIconChrc : public Characteristic
 {
 public:
     NotificationsIconChrc(QDBusConnection bus, unsigned int index, NotificationService *service)
-      : Characteristic(bus, index, NOTI_ICON_UUID, {"encrypt-authenticated-write"}, service, service), mService(service) {}
+      : Characteristic(bus, index, NOTI_ICON_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
+        mJoiner("Notification icon", {"icon"}, 64 * 1024)
+    {
+        QObject::connect(service, &NotificationService::phoneConnectedChanged, this, [this](bool connected) {
+            if(!connected)
+                mJoiner.drop("the phone is gone");
+        });
+    }
 
 public slots:
     void WriteValue(QByteArray value, QVariantMap options)
     {
         WakeHoldScope wake;
         mService->setMtu(optionMtu(options));
-        mBuffer += value;
-        if(mBuffer.size() > 64 * 1024) {
-            qWarning() << "Notification icon without an end, dropped";
-            mBuffer.clear();
-            return;
-        }
-        if(!value.endsWith("</icon>"))
-            return;
-        QXmlStreamReader reader(mBuffer);
-        mBuffer.clear();
-        QString packageName, hash;
-        QByteArray data;
-        if(reader.readNextStartElement() && reader.name() == QLatin1String("icon")) {
-            while(reader.readNextStartElement()) {
-                if(reader.name() == QLatin1String("pn")) packageName = reader.readElementText().trimmed();
-                else if(reader.name() == QLatin1String("h")) hash = reader.readElementText().trimmed();
-                else if(reader.name() == QLatin1String("d")) data = reader.readElementText().toLatin1();
-                else reader.skipCurrentElement();
+        for(const auto &message : mJoiner.add(value, optionOffset(options))) {
+            if(message.first != "icon") {
+                qWarning() << "Notification icon: unknown message" << message.first << "dropped";
+                continue;
             }
+            QXmlStreamReader reader(message.second);
+            QString packageName, hash;
+            QByteArray data;
+            if(reader.readNextStartElement() && reader.name() == QLatin1String("icon")) {
+                while(reader.readNextStartElement()) {
+                    if(reader.name() == QLatin1String("pn")) packageName = reader.readElementText().trimmed();
+                    else if(reader.name() == QLatin1String("h")) hash = reader.readElementText().trimmed();
+                    else if(reader.name() == QLatin1String("d")) data = reader.readElementText().toLatin1();
+                    else reader.skipCurrentElement();
+                }
+            }
+            if(!NotificationService::storeIcon(packageName, hash, data))
+                qWarning() << "Notification icon for" << packageName << "not stored";
         }
-        if(!NotificationService::storeIcon(packageName, hash, data))
-            qWarning() << "Notification icon for" << packageName << "not stored";
     }
 
 private:
     NotificationService *mService;
-    QByteArray mBuffer;
+    MessageJoiner mJoiner;
 };
 
 /*
@@ -349,26 +488,33 @@ class NotificationsRepliesChrc : public Characteristic
 {
 public:
     NotificationsRepliesChrc(QDBusConnection bus, unsigned int index, NotificationService *service)
-      : Characteristic(bus, index, NOTI_RPL_UUID, {"encrypt-authenticated-write"}, service, service), mService(service) {}
+      : Characteristic(bus, index, NOTI_RPL_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
+        mJoiner("Canned replies", {"replies"}, 16384)
+    {
+        QObject::connect(service, &NotificationService::phoneConnectedChanged, this, [this](bool connected) {
+            if(!connected)
+                mJoiner.drop("the phone is gone");
+        });
+    }
 
 public slots:
     void WriteValue(QByteArray value, QVariantMap options)
     {
         mService->setMtu(optionMtu(options));
-        mReader.addData(value);
-        if(!value.endsWith("</replies>"))
-            return;
-
-        QStringList replies;
-        if(mReader.readNextStartElement() && mReader.name() == "replies") {
-            while(mReader.readNextStartElement()) {
-                if(mReader.name() == "r") {
-                    QString r = mReader.readElementText().trimmed();
+        for(const auto &message : mJoiner.add(value, optionOffset(options))) {
+            QXmlStreamReader reader(message.second);
+            if(message.first != "replies" || !reader.readNextStartElement())
+                continue;
+            QStringList replies;
+            while(reader.readNextStartElement()) {
+                if(reader.name() == QLatin1String("r")) {
+                    QString r = reader.readElementText().trimmed();
                     if(!r.isEmpty())
                         replies << r;
                 } else
-                    mReader.skipCurrentElement();
+                    reader.skipCurrentElement();
             }
+            qInfo() << "Canned replies from the phone:" << replies.size();
             // None given: back to the launcher's defaults
             MDConfItem item("/org/asteroidos/notifications/canned-replies");
             if(replies.isEmpty())
@@ -376,12 +522,11 @@ public slots:
             else
                 item.set(replies);
         }
-        mReader.clear();
     }
 
 private:
     NotificationService *mService;
-    QXmlStreamReader mReader;
+    MessageJoiner mJoiner;
 };
 
 /*
@@ -982,6 +1127,12 @@ void NotificationService::post(const PhoneNotification &n)
                 mKnownAndroidNotifs.insert(id, lipstickId);
         }
     }
+    qInfo().noquote() << QString("Phone notification %1: %2 (lipstick %3, %4, %5)").arg(id)
+            .arg(plan.kind == PostPlan::New ? "new card" : plan.kind == PostPlan::Update ? "card updated" : "card posted anew")
+            .arg(lipstickId).arg(plan.preview ? "banner" : "no banner").arg(plan.vibrate ? "vibration" : "quiet");
+    if(!lipstickId)
+        qWarning() << "Phone notification" << id << ": lipstick did not take it"
+                   << (reply.type() == QDBusMessage::ErrorMessage ? reply.errorMessage() : QString());
     if(lipstickId) {
         argumentList[1] = lipstickId;
         remember(lipstickId, n.phoneActions, isCall ? argumentList : QList<QVariant>(), n.thread, content);

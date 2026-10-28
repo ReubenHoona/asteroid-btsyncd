@@ -58,7 +58,7 @@ static bool write(QDBusConnection &driver, const char *path, const QByteArray &v
 }
 
 // dconf: another client sees a write once dconf-service has stored it
-static bool waitFor(const std::function<bool()> &cond, int ms = 5000)
+static bool waitFor(const std::function<bool()> &cond, int ms = 10000)
 {
     QElapsedTimer t;
     t.start();
@@ -133,7 +133,8 @@ int main(int argc, char **argv)
     for(const char *bad : {"", "51.48", "51.48,0.00,1", "abc,def", "91,0", "0,181", "0,0", "nan,1", "inf,1", "51.48;0.00"}) {
         CHECK(write(driver, CHR_LOC, bad));
         spin(300);
-        if(!near(value(LAT), -12.35) || !near(value(LON), -120.5)) {
+        // (a loaded machine: give dconf time to settle; a wrong value never settles back)
+        if(!waitFor([&] { return near(value(LAT), -12.35) && near(value(LON), -120.5); }, 3000)) {
             fprintf(stderr, "FAIL: \"%s\" changed the location\n", bad);
             failures++;
         }

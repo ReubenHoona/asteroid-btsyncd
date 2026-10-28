@@ -23,6 +23,10 @@
  *     not bring the card back
  *   - the same while the link is gone but BlueZ kept the subscription (a
  *     bonded phone): sent after the phone's setup once the link is back
+ *   - framing: writes joined until the closing tag (also split inside it, as
+ *     long-write chunks with offsets, two messages in one write); the rest of
+ *     a write lost at a disconnection or followed by a new message is dropped
+ *     and the next notification still comes
  */
 
 #include "notificationservice.h"
@@ -138,6 +142,17 @@ static void write(QDBusConnection &driver, const QByteArray &value)
 {
     QVariantMap options;
     options.insert("mtu", 185);
+    const QDBusMessage r = gattCall(driver, CHR_UPDATE, "WriteValue", {value, options});
+    CHECK(r.type() == QDBusMessage::ReplyMessage);
+}
+
+// One chunk of a long write (BlueZ passes its offset)
+static void writeAt(QDBusConnection &driver, const QByteArray &value, int offset)
+{
+    QVariantMap options;
+    options.insert("mtu", 185);
+    if(offset)
+        options.insert("offset", (quint16) offset);
     const QDBusMessage r = gattCall(driver, CHR_UPDATE, "WriteValue", {value, options});
     CHECK(r.type() == QDBusMessage::ReplyMessage);
 }
@@ -570,6 +585,49 @@ int main(int argc, char **argv)
     CHECK(collector.feedback.isEmpty());   // the phone is still setting itself up
     CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }, NotificationService::PhoneSetupMs + 3000));
     CHECK(collector.feedback == "<action><id>91</id><ty>dismiss</ty></action>");
+
+    // Framing. Split inside the closing tag: still posted
+    int count = postedCount(fake);
+    write(driver, "<insert><id>95</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Split</bo></ins");
+    spin(200);
+    CHECK(postedCount(fake) == count);
+    write(driver, "ert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 1; }));
+    CHECK(lastPosted(fake).summary == "Lee");
+    CHECK(lastPosted(fake).body == "Split");
+    // A long write: chunks with offsets, the second starting with a child element
+    {
+        const QByteArray xml = "<insert><id>96</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Chunks</bo><rs>1</rs></insert>";
+        writeAt(driver, xml.left(40), 0);
+        writeAt(driver, xml.mid(40, 30), 40);
+        writeAt(driver, xml.mid(70), 70);
+        CHECK(waitFor([&] { return postedCount(fake) == count + 2; }));
+        CHECK(lastPosted(fake).body == "Chunks");
+    }
+    // The rest of a write never came (the phone went mid-write), then a new
+    // notification: the stale part is dropped, the new one comes as it is
+    write(driver, "<insert><id>97</id><vb>none</vb><an>Mail</an><su>Lost</su>");
+    write(driver, "<insert><id>98</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Sent while away</bo><rs>1</rs></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 3; }));
+    CHECK(lastPosted(fake).summary == "Lee");
+    CHECK(lastPosted(fake).body == "Sent while away");
+    spin(200);
+    CHECK(postedCount(fake) == count + 3);
+    // ... also when the disconnection is all that tells
+    write(driver, "<insert><id>99</id><vb>none</vb><an>Mail</an><su>Cut</su>");
+    service.setLinkConnected(false);
+    service.setLinkConnected(true);
+    write(driver, "<bo>tail</bo></insert>");   // the end of the cut one: not a notification
+    write(driver, "<insert><id>100</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Next</bo></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 4; }));
+    CHECK(lastPosted(fake).body == "Next");
+    spin(200);
+    CHECK(postedCount(fake) == count + 4);
+    // Two messages in one write, and whitespace between writes
+    write(driver, "<insert><id>101</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>One</bo></insert>\n"
+                  "<removed><id>100</id></removed>\n");
+    CHECK(waitFor([&] { return postedCount(fake) == count + 5; }));
+    CHECK(lastPosted(fake).body == "One");
 
     // The decisions on their own
     {
