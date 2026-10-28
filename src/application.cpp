@@ -54,7 +54,7 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     addService(new PhoneStatusService(9, bus, notifications));
     // Questions of the assistant (asteroid-assistant), relayed by the
     // phone to the answer server set there
-    addService(new AssistantService(10, bus));
+    addService(new AssistantService(10, bus, notifications));
 
     qDBusRegisterMetaType<InterfaceList>();
     qDBusRegisterMetaType<ManagedObjectList>();

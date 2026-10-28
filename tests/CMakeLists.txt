@@ -10,6 +10,13 @@ add_executable(assistant_test assistant_test.cpp ../src/assistantprotocol.cpp)
 target_include_directories(assistant_test PRIVATE ../src)
 target_link_libraries(assistant_test PRIVATE Qt6::Core)
 
+# The assistant relay follows the phone's link, on a private bus like
+# notifications_test
+add_executable(assistantlink_test assistantlink_test.cpp ../src/assistantservice.cpp ../src/assistantprotocol.cpp
+	../src/notificationservice.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(assistantlink_test PRIVATE ../src)
+target_link_libraries(assistantlink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
 add_executable(voice_test voice_test.cpp ../src/voiceprotocol.cpp)
 target_include_directories(voice_test PRIVATE ../src)
 target_link_libraries(voice_test PRIVATE Qt6::Core)

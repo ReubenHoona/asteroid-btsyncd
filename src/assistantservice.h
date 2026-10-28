@@ -28,6 +28,7 @@
 #include "service.h"
 
 class AssistantService;
+class NotificationService;
 
 /* Watch to phone: the questions (notifications of D001, MTU-sized pieces) */
 class AssistantRequestsChrc : public Characteristic
@@ -90,7 +91,11 @@ class AssistantService : public Service
 {
     Q_OBJECT
 public:
-    AssistantService(int index, QDBusConnection bus, QObject *parent = nullptr);
+    // notifications: the phone's BlueZ link (NotificationService::phoneConnected):
+    // BlueZ keeps a bonded phone's subscription when it goes, without StopNotify,
+    // so the subscription alone does not say the phone is there
+    AssistantService(int index, QDBusConnection bus, NotificationService *notifications = nullptr,
+                     QObject *parent = nullptr);
 
     bool available() const;
     bool ask(uint id, const QByteArray &request);
@@ -106,7 +111,10 @@ signals:
 
 private:
     void expire();
+    // The phone is gone (unsubscribed, or its link dropped): what waits fails
+    void phoneGone(const char *why);
 
+    NotificationService *mNotifications;
     AssistantRequestsChrc *mRequests;
     AssistantDBusApi *mApi;
     bool mPhoneReady = false;
