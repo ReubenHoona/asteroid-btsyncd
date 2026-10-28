@@ -55,6 +55,7 @@ set(
 	voiceservice.h
 	voicesource.h
 	wakehold.h
+	messagejoiner.h
 	phonestatusservice.h
 	assistantprotocol.h
 	assistantservice.h
