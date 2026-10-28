@@ -21,6 +21,8 @@
 #include "characteristic.h"
 #include "common.h"
 #include <time.h>
+#include <math.h>
+#include <cmath>
 
 int getQByteArrayInt(QByteArray arr, int index) {
     return (((unsigned char) arr[index * 2]) << 8) | ((unsigned char) arr[index * 2 + 1]);
@@ -35,6 +37,32 @@ public slots:
     void WriteValue(QByteArray value, QVariantMap)
     {
         MDConfItem("/org/asteroidos/weather/city-name").set(QString::fromUtf8(value));
+        // A city without a location after it (an older phone): the old
+        // location is not this city's. The phone sends the location next.
+        MDConfItem("/org/asteroidos/weather/phone-location/latitude").unset();
+        MDConfItem("/org/asteroidos/weather/phone-location/longitude").unset();
+    }
+};
+
+// "LAT,LON" in degrees (UTF-8, '.' decimals, rounded by the phone to 0.01):
+// where the forecast is for. eos-weather uses it when the phone is away.
+class WeatherLocationChrc : public Characteristic
+{
+public:
+    WeatherLocationChrc(QDBusConnection bus, int index, Service *service) : Characteristic(bus, index, WEAT_LOC_UUID, {"encrypt-authenticated-write"}, service) {}
+
+public slots:
+    void WriteValue(QByteArray value, QVariantMap)
+    {
+        const QList<QByteArray> parts = value.trimmed().split(',');
+        bool okLat = false, okLon = false;
+        const double lat = parts.size() == 2 ? parts[0].trimmed().toDouble(&okLat) : 0;
+        const double lon = parts.size() == 2 ? parts[1].trimmed().toDouble(&okLon) : 0;
+        if (!okLat || !okLon || !std::isfinite(lat) || !std::isfinite(lon) ||
+            fabs(lat) > 90 || fabs(lon) > 180 || (lat == 0 && lon == 0))
+            return;
+        MDConfItem("/org/asteroidos/weather/phone-location/latitude").set(round(lat * 100) / 100);
+        MDConfItem("/org/asteroidos/weather/phone-location/longitude").set(round(lon * 100) / 100);
     }
 };
 
@@ -91,4 +119,5 @@ WeatherService::WeatherService(int index, QDBusConnection bus, QObject *parent) 
     addCharacteristic(new WeatherIdsChrc(bus, 1, this));
     addCharacteristic(new WeatherMaxTempsChrc(bus, 2, this));
     addCharacteristic(new WeatherMinTempsChrc(bus, 3, this));
+    addCharacteristic(new WeatherLocationChrc(bus, 4, this));
 }
