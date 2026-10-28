@@ -202,6 +202,28 @@ QString PhoneNotification::previewBody() const
     return (m.first.isEmpty() || m.first == summary) ? m.second : m.first + QStringLiteral(": ") + m.second;
 }
 
+/*
+ * As Wear OS, a call ringing on the phone and an alarm going off on the phone
+ * only vibrate on the watch: the phone plays their sound. eos_phone_ringing
+ * and eos_phone_alarm are ngfd's ringtone and alarm vibration patterns
+ * without sound; ngfd's own ringtone and alarm events, which ring through
+ * the watch speaker, stay for the watch's alarms and timers and for the
+ * find-my-watch alert (it rings the watch itself, as on Wear OS).
+ */
+QString PostPlan::feedbackEvent(const PhoneNotification &n)
+{
+    if(n.vibrate.isNull()) // for backwards compatibility
+        return QStringLiteral("notif_strong");
+    if(n.vibrate == QLatin1String("normal"))
+        return QStringLiteral("notif_normal");
+    if(n.vibrate == QLatin1String("ringtone"))
+        return n.phoneActions.contains("found") ? QStringLiteral("ringtone") : QStringLiteral("eos_phone_ringing");
+    if(n.vibrate == QLatin1String("alarm"))
+        // the alarm pattern, repeated until the alarm is acted on or gone
+        return QStringLiteral("eos_phone_alarm");
+    return QStringLiteral("notif_strong");
+}
+
 PostPlan PostPlan::decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb)
 {
     PostPlan plan;
@@ -1056,17 +1078,8 @@ void NotificationService::post(const PhoneNotification &n)
     if(!plan.vibrate) {
         hints.insert("x-nemo-feedback", "notif_silent");
         hints.insert("x-nemo-feedback-suppressed", true);
-    } else if(n.vibrate.isNull()) // for backwards compatibility
-        hints.insert("x-nemo-feedback", "notif_strong");
-    else if(n.vibrate == QLatin1String("normal"))
-        hints.insert("x-nemo-feedback", "notif_normal");
-    else if(n.vibrate == QLatin1String("ringtone"))
-        hints.insert("x-nemo-feedback", "ringtone");
-    else if(n.vibrate == QLatin1String("alarm"))
-        // ngfd's alarm pattern, repeated until the alarm is acted on or gone
-        hints.insert("x-nemo-feedback", "alarm");
-    else
-        hints.insert("x-nemo-feedback", "notif_strong");
+    } else
+        hints.insert("x-nemo-feedback", PostPlan::feedbackEvent(n));
 
     hints.insert("urgency", 3);
 

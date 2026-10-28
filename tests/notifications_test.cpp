@@ -273,6 +273,8 @@ int main(int argc, char **argv)
     write(driver, "<insert><id>-77</id><vb>ringtone</vb><an>Incoming call</an><su>Gadgetbridge</su><ac>found</ac></insert>");
     CHECK(waitFor([&] { return postedCount(fake) == 3; }));
     CHECK(lastPosted(fake).actions == (QStringList() << "found" << "Found it"));
+    // the watch itself rings (ngfd's ringtone, with sound)
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "ringtone");
     emitActionInvoked(fakeConn, 102, "found");
     CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
     CHECK(collector.feedback == "<action><id>-77</id><ty>found</ty></action>");
@@ -467,13 +469,14 @@ int main(int argc, char **argv)
     CHECK(lastPosted(fake).replacesId == upload);
     CHECK(!lastPosted(fake).hints.contains("x-nemo-preview-body"));
 
-    // A phone alarm going off: ngfd's alarm pattern, and its category for the launcher
+    // A phone alarm going off: the alarm vibration without sound (the phone
+    // rings, as Wear OS), and its category for the launcher
     write(driver, "<insert><id>70</id><vb>alarm</vb><pn>com.example.clock</pn><an>Clock</an><su>Alarm</su><bo>07:00</bo>"
                   "<ac>open,mute</ac><ax><a>Snooze</a><a>Dismiss</a></ax><ca>alarm</ca><pr>5</pr></insert>");
     CHECK(waitFor([&] { return postedCount(fake) == before + 10; }));
     {
         const Posted p = lastPosted(fake);
-        CHECK(p.hints.value("x-nemo-feedback").toString() == "alarm");
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "eos_phone_alarm");
         CHECK(p.hints.value("x-asteroid-category").toString() == "alarm");
         CHECK(p.hints.value("x-asteroid-app-actions").toString() == "Snooze\nDismiss");
     }
@@ -486,7 +489,7 @@ int main(int argc, char **argv)
     CHECK(!lastPosted(fake).hints.contains("x-nemo-preview-body"));
     write(driver, "<insert><id>72</id><vb>alarm</vb><an>Clock</an><su>Timer</su><bo>Time's up</bo><ca>alarm</ca></insert>");
     CHECK(waitFor([&] { return postedCount(fake) == before + 12; }));
-    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "alarm");
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "eos_phone_alarm");
     service.setDoNotDisturb(false);
 
     // App icons: one icon in two writes, then a notification that uses it
@@ -721,6 +724,29 @@ int main(int argc, char **argv)
         n.phoneActions = QStringList() << "found";
         CHECK(PostPlan::decide(n, false, true, true).vibrate);
         n.phoneActions.clear();
+    }
+    // The vibration (ngfd event) of each <vb>: a call or an alarm on the phone
+    // only vibrates on the watch, the find-my-watch alert rings it
+    {
+        PhoneNotification n;
+        CHECK(PostPlan::feedbackEvent(n) == "notif_strong");
+        n.vibrate = "normal";
+        CHECK(PostPlan::feedbackEvent(n) == "notif_normal");
+        n.vibrate = "strong";
+        CHECK(PostPlan::feedbackEvent(n) == "notif_strong");
+        n.vibrate = "ringtone";
+        n.phoneActions = QStringList() << "answer" << "reject";
+        CHECK(PostPlan::feedbackEvent(n) == "eos_phone_ringing");
+        n.phoneActions.clear();
+        CHECK(PostPlan::feedbackEvent(n) == "eos_phone_ringing");
+        n.phoneActions = QStringList() << "found";
+        CHECK(PostPlan::feedbackEvent(n) == "ringtone");
+        n.phoneActions.clear();
+        n.vibrate = "alarm";
+        CHECK(PostPlan::feedbackEvent(n) == "eos_phone_alarm");
+    }
+    {
+        PhoneNotification n;
         n.vibrate = "strong";
         n.resync = true;
         CHECK(!PostPlan::decide(n, false, true, false).preview);
