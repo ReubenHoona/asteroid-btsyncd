@@ -27,6 +27,7 @@
 #include <QDBusPendingReply>
 #include <QDBusMessage>
 #include <QDBusReply>
+#include <QDBusServiceWatcher>
 #include <QDebug>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -47,6 +48,16 @@ static const char ASSISTANT_IFACE[] = "org.asteroidos.assistant";
 static const int MaxResultSize = 4096;
 // When the phone's writes carry no mtu option (BlueZ < 5.62)
 static const int AssumedMtu = 247;
+// The watch's recogniser ends a dictation itself (dictation-max, 30 s from
+// the first audio, then its decode): these only end a session it never
+// answers (hung, or gone without a Result). BTSYNCD_VOICE_LOCAL_TIMEOUT_MS:
+// a shorter wait for the text, for tests.
+static const int LocalListenMs = MaxListenMs + 5000;
+static int localResultTimeoutMs()
+{
+    const int ms = qEnvironmentVariableIntValue("BTSYNCD_VOICE_LOCAL_TIMEOUT_MS");
+    return ms > 0 ? ms : 20000;
+}
 
 static int optionMtu(const QVariantMap &options)
 {
@@ -176,6 +187,21 @@ VoiceService::VoiceService(int index, QDBusConnection bus, NotificationService *
                     QStringLiteral("Partial"), this, SLOT(onLocalPartial(uint,QString)));
     session.connect(QLatin1String(ASSISTANT_SERVICE), QLatin1String(ASSISTANT_PATH), QLatin1String(ASSISTANT_IFACE),
                     QStringLiteral("Result"), this, SLOT(onLocalResult(uint,QString)));
+    // asteroid-assistant gone in the middle of a dictation (it crashed): no
+    // Result will come. Only once its reply named the session: an instance
+    // that exited idle just before Dictate() makes that call fail instead.
+    QDBusServiceWatcher *assistantWatcher = new QDBusServiceWatcher(QLatin1String(ASSISTANT_SERVICE), session,
+                                                                    QDBusServiceWatcher::WatchForUnregistration, this);
+    connect(assistantWatcher, &QDBusServiceWatcher::serviceUnregistered, this, [this] {
+        if (!mLocalSession || (mState != Listening && mState != Recognising))
+            return;
+        qWarning() << "Voice: the watch's recogniser went away during session" << mSid;
+        endLocal();
+        mMaxTimer.stop();
+        mResultTimer.stop();
+        mState = Idle;
+        emit failed(QStringLiteral("engine"));
+    });
     if (!session.registerObject(BTSYNCD_VOICE_PATH, mApi,
                                 QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals))
         fprintf(stderr, "VoiceService: cannot register %s on the session bus\n", BTSYNCD_VOICE_PATH);
@@ -195,6 +221,9 @@ bool VoiceService::localWanted()
 
 bool VoiceService::localInstalled()
 {
+    // BTSYNCD_ASSISTANT_INSTALLED=1: the tests' fake asteroid-assistant
+    if (qEnvironmentVariableIntValue("BTSYNCD_ASSISTANT_INSTALLED") == 1)
+        return true;
     // files only: asking the service would start it each time a reply page opens
     return QFileInfo::exists(QStringLiteral("/usr/share/dbus-1/services/org.asteroidos.assistant.service"))
             && QFileInfo(QStringLiteral("/usr/libexec/asteroid-assistant/asteroid-assistant-stt")).isExecutable()
@@ -241,8 +270,10 @@ uint VoiceService::startLocal(uint notificationId, const QString &source)
     QDBusInterface a(QLatin1String(ASSISTANT_SERVICE), QLatin1String(ASSISTANT_PATH), QLatin1String(ASSISTANT_IFACE),
                      QDBusConnection::sessionBus());
     // D-Bus may start the service first: not waited for here (this thread
-    // also serves the phone); its session comes with the reply or its first
-    // signal
+    // also serves the phone). The session is the one the reply names: a
+    // signal that comes before the reply is another session's (the one
+    // Dictate() replaced, still in flight), except a Result of a session
+    // that failed at once, which is kept until the reply says whose it is.
     a.setTimeout(5000);
     const QString spec = sourceSpec(source);
     QDBusPendingCallWatcher *w = new QDBusPendingCallWatcher(
@@ -252,30 +283,51 @@ uint VoiceService::startLocal(uint notificationId, const QString &source)
         w->deleteLater();
         const QDBusPendingReply<uint> r = *w;
         if (sid != mSid || !mLocalPending)
-            return;     // a newer session, or its result came first
+            return;     // a newer session, or this one was cancelled
         mLocalPending = false;
+        const uint early = mEarlySession;
+        const QString earlyResult = mEarlyResult;
+        mEarlySession = 0;
+        mEarlyResult.clear();
         if (r.isError() || r.value() == 0) {
             qInfo() << "Voice: the watch's recogniser did not start:" << (r.isError() ? r.error().message() : QStringLiteral("refused"));
+            // A Dictate() that timed out may still have started listening
+            if (r.isError())
+                cancelAssistant();
+            if (!r.isError() && early) {
+                // it said why before it refused (no engine, no microphone)
+                mLocalSession = early;
+                onLocalResult(early, earlyResult);
+                return;
+            }
             endLocal();
+            mMaxTimer.stop();
+            mResultTimer.stop();
             mState = Idle;
             if (phoneAvailable() && startPhone(notificationId, source))
                 return;
             emit failed(QStringLiteral("engine"));
             return;
         }
-        if (!mLocalSession)
-            mLocalSession = r.value();
+        mLocalSession = r.value();
+        if (early == mLocalSession)
+            onLocalResult(early, earlyResult);
     });
     mLocalPending = true;
     mLocalSession = 0;
+    mEarlySession = 0;
+    mEarlyResult.clear();
     mLocalSource = source;
     mSid = sid;
     mNotificationId = notificationId;
     mLastPartial.clear();
     mFinal.clear();
     mState = Listening;
-    qInfo() << "Voice: session" << mSid << "for notification" << notificationId << "recognised on the watch (dictation"
-            << mLocalSession << "from" << spec << ")";
+    // a backstop: asteroid-assistant ends the dictation itself
+    mResultTimer.stop();
+    mMaxTimer.start(LocalListenMs);
+    qInfo() << "Voice: session" << mSid << "for notification" << notificationId << "recognised on the watch (from"
+            << spec << ")";
     return mSid;
 }
 
@@ -283,22 +335,22 @@ void VoiceService::endLocal()
 {
     mLocalSession = 0;
     mLocalPending = false;
+    mEarlySession = 0;
+    mEarlyResult.clear();
     mLocalSource.clear();
 }
 
-bool VoiceService::localSession(uint session)
+void VoiceService::cancelAssistant()
 {
-    // the first signal before Dictate() returns names the session
-    if (!mLocalSession && mLocalPending && session) {
-        mLocalSession = session;
-        mLocalPending = false;
-    }
-    return mLocalSession && session == mLocalSession;
+    QDBusMessage m = QDBusMessage::createMethodCall(QLatin1String(ASSISTANT_SERVICE), QLatin1String(ASSISTANT_PATH),
+                                                    QLatin1String(ASSISTANT_IFACE), QStringLiteral("Cancel"));
+    m.setAutoStartService(false);
+    QDBusConnection::sessionBus().call(m, QDBus::NoBlock);
 }
 
 void VoiceService::onLocalPartial(uint session, const QString &text)
 {
-    if (!localSession(session) || mState != Listening)
+    if (!mLocalSession || session != mLocalSession || mState != Listening)
         return;
     if (!text.isEmpty() && text != mLastPartial) {
         mLastPartial = text;
@@ -308,8 +360,16 @@ void VoiceService::onLocalPartial(uint session, const QString &text)
 
 void VoiceService::onLocalResult(uint session, const QString &json)
 {
-    if (!localSession(session))
+    if (mLocalPending && !mLocalSession) {
+        // before Dictate() answered: whose it is, its reply says
+        mEarlySession = session;
+        mEarlyResult = json;
         return;
+    }
+    if (!mLocalSession || session != mLocalSession)
+        return;
+    mMaxTimer.stop();
+    mResultTimer.stop();
     const QJsonObject r = QJsonDocument::fromJson(json.toUtf8()).object();
     const QString type = r.value(QStringLiteral("type")).toString();
     const QString source = mLocalSource;
@@ -458,6 +518,8 @@ bool VoiceService::stop()
                          QDBusConnection::sessionBus());
         a.asyncCall(QStringLiteral("Stop"));
         mState = Recognising;
+        mMaxTimer.stop();
+        mResultTimer.start(localResultTimeoutMs());
         return true;
     }
     stopSource();
@@ -482,6 +544,8 @@ bool VoiceService::cancel()
                          QDBusConnection::sessionBus());
         a.asyncCall(QStringLiteral("Cancel"));
         endLocal();
+        mMaxTimer.stop();
+        mResultTimer.stop();
         mState = Idle;
         qInfo() << "Voice: session" << mSid << "cancelled (on the watch)";
         return true;
@@ -578,8 +642,15 @@ void VoiceService::onResultTimeout()
 {
     if (mState != Recognising)
         return;
+    const bool local = mLocalSession || mLocalPending;
+    if (local) {
+        // asteroid-assistant never answered: its session is dropped
+        qWarning() << "Voice: no text from the watch's recogniser in" << localResultTimeoutMs() << "ms";
+        cancelAssistant();
+        endLocal();
+    }
     if (!mLastPartial.trimmed().isEmpty()) {
-        qInfo() << "Voice: no final text from the phone, using the last partial";
+        qInfo() << "Voice: no final text from the" << (local ? "watch" : "phone") << ", using the last partial";
         mFinal = mLastPartial.trimmed();
         mState = Done;
         emit finalText(mFinal);

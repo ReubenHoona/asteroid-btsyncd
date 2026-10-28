@@ -21,6 +21,13 @@ add_executable(voice_test voice_test.cpp ../src/voiceprotocol.cpp)
 target_include_directories(voice_test PRIVATE ../src)
 target_link_libraries(voice_test PRIVATE Qt6::Core)
 
+# Voice replies recognised on the watch, with a fake asteroid-assistant, on a
+# private bus like notifications_test
+add_executable(voicelocal_test voicelocal_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp
+	../src/notificationservice.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(voicelocal_test PRIVATE ../src)
+target_link_libraries(voicelocal_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
 # The notification service on a private bus (see the top of the source):
 # dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS notifications_test'
 add_executable(notifications_test notifications_test.cpp ../src/notificationservice.cpp
