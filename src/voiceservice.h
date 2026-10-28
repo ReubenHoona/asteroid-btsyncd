@@ -66,12 +66,19 @@ private:
  *   Start(u notificationId, s source) -> u session id, 0 if it cannot start
  *     (then Error() says why). source: "" = the configured source (env
  *     BTSYNCD_VOICE_SOURCE, else dconf /org/asteroidos/btsyncd/voice-source,
- *     else the microphone), "mic", or the path of a 16 kHz mono WAV (test).
+ *     else the microphone), "mic", or the path of a 16 kHz mono WAV (test);
+ *     "phone:" before any of them: the phone's recogniser whatever the
+ *     setting.
+ *     Where the speech is recognised: dconf /org/asteroidos/voice/recognition
+ *     "watch" (the default: asteroid-assistant's Dictate, the same on-watch
+ *     recogniser as the assistant; the phone's only when the watch's cannot
+ *     load) or "phone" (streamed to Gadgetbridge, as before).
  *   Stop()   the user finished speaking: the phone gives the final text
  *   Cancel() drop the session
  *   Send()   reply to the notification with the final text (the existing
  *            reply path, as Notifications.Reply)
- *   Available() a phone that does voice replies is connected
+ *   Available() speech can be recognised: on the watch, or by a connected
+ *     phone that does voice replies
  *   State()  idle | listening | recognising | done
  * Signals Partial(s text), Final(s text), Error(s code).
  */
@@ -127,6 +134,8 @@ signals:
     void failed(const QString &code);
 
 private slots:
+    void onLocalPartial(uint session, const QString &text);
+    void onLocalResult(uint session, const QString &json);
     void onFrame(const QByteArray &pcm);
     void onSourceFailed(const QString &message);
     void onResultTimeout();
@@ -140,9 +149,15 @@ private:
     void failLater(const QString &code);
     int framesPerNotification() const;
     static QString sourceSpec(const QString &requested);
-    // Hook for the on-watch recogniser (offline fallback, later): start a
-    // local session instead when no phone does voice replies
-    bool startLocal(uint notificationId, const QString &source);
+    bool phoneAvailable() const;
+    /* The watch's recogniser is there (asteroid-assistant, its helper and
+     * model) and the setting says the watch */
+    static bool localWanted();
+    static bool localInstalled();
+    uint startPhone(uint notificationId, const QString &source);
+    // On the watch: asteroid-assistant's Dictate, its signals relayed
+    uint startLocal(uint notificationId, const QString &source);
+    void endLocal();
 
     NotificationService *mNotifications;
     VoiceNotifyChrc *mEvent;
@@ -166,6 +181,9 @@ private:
     VoiceSource *mSource = nullptr;
     QString mLastPartial;
     QString mFinal;
+    // a session of asteroid-assistant's (0: none), and what to fall back on
+    uint mLocalSession = 0;
+    QString mLocalSource;
     QTimer mMaxTimer;
     QTimer mResultTimer;
 };
