@@ -648,9 +648,15 @@ void NotificationService::sendFeedback(int phoneId, const QString &type, const Q
     if(index >= 0)
         w.writeTextElement("ix", QString::number(index));
     w.writeEndElement();
-    // What went to the phone, without the text of a reply
-    qInfo() << "Feedback to the phone:" << type << "for" << phoneId << (index >= 0 ? QString("index %1").arg(index) : QString())
-            << (mFeedback->notifying() ? "" : "(no phone subscribed)");
+    // What went to the phone: the length of a reply, not its text
+    QString line = QStringLiteral("Feedback to the phone: %1 for %2").arg(type).arg(phoneId);
+    if(index >= 0)
+        line += QStringLiteral(" index %1").arg(index);
+    else if(!text.isEmpty())
+        line += QStringLiteral(" (text of %1 characters)").arg(text.size());
+    if(!mFeedback->notifying())
+        line += QStringLiteral(" (no phone subscribed)");
+    qInfo().noquote() << line;
     mFeedback->send(xml, mMtu);
 }
 
@@ -715,12 +721,10 @@ bool NotificationService::reply(uint notificationId, const QString &text)
 
     sendFeedback(id, "reply", text.trimmed());
 
-    // Done with it on the watch; the phone updates or removes its own
-    mActioned.insert(notificationId);
-    mKnownAndroidNotifs.remove(id);
-    forget(notificationId);
-    static QDBusInterface notifyApp(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE, NOTIFICATIONS_MAIN_IFACE);
-    notifyApp.call(QDBus::NoBlock, "CloseNotification", notificationId);
+    // Wear OS keeps the conversation on the watch (the launcher says
+    // "Sent"): the phone's update, with the reply in it, replaces the card in
+    // place without alerting, or the phone removes it
+    mRepliedAt.insert(notificationId, QDateTime::currentMSecsSinceEpoch());
     return true;
 }
 
@@ -776,6 +780,7 @@ void NotificationService::forget(uint notificationId)
     mTimestamps.remove(notificationId);
     mContent.remove(notificationId);
     mPendingClose.remove(notificationId);
+    mRepliedAt.remove(notificationId);
     const QString thread = mThreadOf.take(notificationId);
     if(!thread.isEmpty() && mThreads.value(thread) == notificationId)
         mThreads.remove(thread);
@@ -835,7 +840,16 @@ void NotificationService::post(const PhoneNotification &n)
     const QString shownBody = n.shownBody();
     const uint content = contentHash(n.summary, shownBody);
     const bool contentChanged = !replacesId || mContent.value(replacesId) != content;
-    const PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb);
+    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb);
+    // The update that brings the watch's own reply: in place, quietly
+    if(replacesId && mRepliedAt.contains(replacesId)) {
+        const qint64 repliedAt = mRepliedAt.take(replacesId);
+        if(plan.kind == PostPlan::Repost && QDateTime::currentMSecsSinceEpoch() - repliedAt < ReplyEchoMs) {
+            plan.kind = PostPlan::Update;
+            plan.preview = false;
+            plan.vibrate = false;
+        }
+    }
     const bool isCall = n.isCall();
 
     QVariantMap hints;

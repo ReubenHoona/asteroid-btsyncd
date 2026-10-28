@@ -541,6 +541,62 @@ int main(int argc, char **argv)
     CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }, 4000));
     CHECK(collector.feedback == "<action><id>90</id><ty>dismiss</ty></action>");
 
+    // A reply from the watch, as on Wear OS: the text goes to the phone and
+    // the card stays; the phone's update with the reply replaces it in
+    // place without an alert; the next message alerts again
+    {
+        const char *kimFirst = "<insert><id>95</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
+                               "<bo>are you coming?</bo><ac>reply,open</ac><th>c0ffee09</th>"
+                               "<ms><m><s>Kim</s><t>are you coming?</t></m></ms></insert>";
+        before = postedCount(fake);
+        write(driver, kimFirst);
+        CHECK(waitFor([&] { return postedCount(fake) == before + 1; }));
+        uint kim = 0;
+        int closedNow = 0;
+        {
+            QMutexLocker l(&fake.lock);
+            kim = fake.nextId - 1;
+            closedNow = fake.closed.size();
+        }
+        collector.feedback.clear();
+        QDBusMessage m = QDBusMessage::createMethodCall(SERVICE_NAME, BTSYNCD_NOTIF_PATH, BTSYNCD_NOTIF_IFACE, "Reply");
+        m << kim << QStringLiteral("  OK  ");
+        const QDBusMessage r = driver.call(m, QDBus::BlockWithGui, 5000);
+        CHECK(r.type() == QDBusMessage::ReplyMessage && r.arguments().value(0).toBool());
+        CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
+        CHECK(collector.feedback == "<action><id>95</id><ty>reply</ty><tx>OK</tx></action>");
+        spin(300);
+        {
+            QMutexLocker l(&fake.lock);
+            CHECK(fake.closed.size() == closedNow);
+        }
+        // the phone's update, with the reply
+        write(driver, "<insert><id>95</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
+                      "<bo>OK</bo><ac>reply,open</ac><th>c0ffee09</th>"
+                      "<ms><m><s>Kim</s><t>are you coming?</t></m><m><s>Me</s><t>OK</t></m></ms></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == before + 2; }));
+        {
+            const Posted p = lastPosted(fake);
+            CHECK(p.replacesId == kim);
+            CHECK(p.body == "Kim: are you coming?\nMe: OK");
+            CHECK(!p.hints.contains("x-nemo-preview-body"));
+            CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_silent");
+            QMutexLocker l(&fake.lock);
+            CHECK(fake.closed.size() == closedNow);
+        }
+        // Kim answers: a banner and a vibration again
+        write(driver, "<insert><id>95</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Kim</su>"
+                      "<bo>great</bo><ac>reply,open</ac><th>c0ffee09</th>"
+                      "<ms><m><s>Kim</s><t>are you coming?</t></m><m><s>Me</s><t>OK</t></m>"
+                      "<m><s>Kim</s><t>great</t></m></ms></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == before + 3; }));
+        {
+            const Posted p = lastPosted(fake);
+            CHECK(p.hints.value("x-nemo-preview-body").toString() == "great");
+            CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_normal");
+        }
+    }
+
     // The decisions on their own
     {
         PhoneNotification n;

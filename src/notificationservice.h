@@ -182,6 +182,9 @@ public:
     static constexpr const char *CategoryHint = "x-asteroid-category";
     // A card the phone removed closes this much later (see removed())
     static const int CloseDelayMs = 1500;
+    // The phone's first update of a card within this long after a reply
+    // from the watch is the reply itself: no alert for it
+    static const int ReplyEchoMs = 60000;
 
     // Phone notification id -> lipstick notification id
     QHash<int, uint> mKnownAndroidNotifs;
@@ -276,6 +279,8 @@ private:
     QHash<QString, uint> mThreads;
     QHash<uint, QString> mThreadOf;
     QHash<uint, uint> mContent;
+    // lipstick id -> when the watch replied to it
+    QHash<uint, qint64> mRepliedAt;
     // Cards the phone removed, closed a moment later: a conversation the app
     // re-posts (remove, then insert) keeps its card
     QHash<uint, int> mPendingClose;
