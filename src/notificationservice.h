@@ -104,7 +104,10 @@ class NotificationsFeedbackChrc : public Characteristic
 
 public:
     NotificationsFeedbackChrc(QDBusConnection bus, int index, Service *service);
-    void send(const QByteArray &xml, int mtu);
+    // Returns the number of notifications it took
+    int send(const QByteArray &xml, int mtu);
+    // The bytes one notification carries for an ATT MTU
+    static int chunkSize(int mtu);
     // A phone has subscribed (BlueZ StartNotify): it gets what is sent
     bool notifying() const { return mNotifying; }
 

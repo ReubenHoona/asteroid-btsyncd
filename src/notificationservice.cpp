@@ -409,25 +409,35 @@ NotificationsFeedbackChrc::NotificationsFeedbackChrc(QDBusConnection bus, int in
     connect(this, SIGNAL(valueChanged()), this, SLOT(emitPropertiesChanged()));
 }
 
-void NotificationsFeedbackChrc::send(const QByteArray &xml, int mtu)
+int NotificationsFeedbackChrc::chunkSize(int mtu)
+{
+    return qBound(20, mtu - 3, 509);
+}
+
+int NotificationsFeedbackChrc::send(const QByteArray &xml, int mtu)
 {
     // One notification carries at most MTU - 3 bytes; the phone joins the
     // pieces until </action>
-    int chunk = qBound(20, mtu - 3, 509);
+    const int chunk = chunkSize(mtu);
+    int pieces = 0;
     for(int pos = 0; pos < xml.size(); pos += chunk) {
         mValue = xml.mid(pos, chunk);
         emit valueChanged();
+        pieces++;
     }
+    return pieces;
 }
 
 void NotificationsFeedbackChrc::StartNotify()
 {
+    qInfo() << "Feedback: the phone subscribed";
     mNotifying = true;
     emit notifyingChanged(true);
 }
 
 void NotificationsFeedbackChrc::StopNotify()
 {
+    qInfo() << "Feedback: the phone unsubscribed";
     mNotifying = false;
     emit notifyingChanged(false);
 }
@@ -648,16 +658,24 @@ void NotificationService::sendFeedback(int phoneId, const QString &type, const Q
     if(index >= 0)
         w.writeTextElement("ix", QString::number(index));
     w.writeEndElement();
-    // What went to the phone: the length of a reply, not its text
+    // What went to the phone: the length of a reply, not its text (dconf
+    // /org/asteroidos/btsyncd/log-feedback true, or BTSYNCD_LOG_FEEDBACK=1:
+    // the whole XML, text included, for debugging)
+    const bool subscribed = mFeedback->notifying();
+    const int pieces = mFeedback->send(xml, mMtu);
     QString line = QStringLiteral("Feedback to the phone: %1 for %2").arg(type).arg(phoneId);
     if(index >= 0)
         line += QStringLiteral(" index %1").arg(index);
     else if(!text.isEmpty())
         line += QStringLiteral(" (text of %1 characters)").arg(text.size());
-    if(!mFeedback->notifying())
+    line += QStringLiteral(", %1 bytes in %2 notification(s) of up to %3 (ATT MTU %4)")
+            .arg(xml.size()).arg(pieces).arg(NotificationsFeedbackChrc::chunkSize(mMtu)).arg(mMtu);
+    if(!subscribed)
         line += QStringLiteral(" (no phone subscribed)");
     qInfo().noquote() << line;
-    mFeedback->send(xml, mMtu);
+    if(qEnvironmentVariableIntValue("BTSYNCD_LOG_FEEDBACK") == 1
+            || MDConfItem(QStringLiteral("/org/asteroidos/btsyncd/log-feedback")).value(false).toBool())
+        qInfo().noquote() << "Feedback XML:" << QString::fromUtf8(xml);
 }
 
 QString NotificationService::appActionKey(int index)

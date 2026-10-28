@@ -96,12 +96,16 @@ class Collector : public QObject
     Q_OBJECT
 public:
     QByteArray feedback;
+    int largestPiece = 0;
     QList<bool> findPhoneChanges;
 public slots:
     void propertiesChanged(const QString &, const QVariantMap &changed, const QStringList &)
     {
-        if(changed.contains("Value"))
-            feedback += changed.value("Value").toByteArray();
+        if(changed.contains("Value")) {
+            const QByteArray piece = changed.value("Value").toByteArray();
+            feedback += piece;
+            largestPiece = qMax(largestPiece, int(piece.size()));
+        }
     }
     void findPhoneChanged(bool ringing) { findPhoneChanges << ringing; }
 };
@@ -559,12 +563,25 @@ int main(int argc, char **argv)
             closedNow = fake.closed.size();
         }
         collector.feedback.clear();
+        collector.largestPiece = 0;
         QDBusMessage m = QDBusMessage::createMethodCall(SERVICE_NAME, BTSYNCD_NOTIF_PATH, BTSYNCD_NOTIF_IFACE, "Reply");
         m << kim << QStringLiteral("  OK  ");
         const QDBusMessage r = driver.call(m, QDBus::BlockWithGui, 5000);
         CHECK(r.type() == QDBusMessage::ReplyMessage && r.arguments().value(0).toBool());
         CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
         CHECK(collector.feedback == "<action><id>95</id><ty>reply</ty><tx>OK</tx></action>");
+        // the phone wrote with an MTU of 185: one notification
+        CHECK(collector.largestPiece == collector.feedback.size());
+        // a long reply (a voice one) whole, in pieces of at most MTU - 3
+        collector.feedback.clear();
+        collector.largestPiece = 0;
+        const QString longText = QStringLiteral("I am on my way, see you at eight \u00e9t\u00e9 ") + QString(200, QLatin1Char('x'));
+        QDBusMessage m2 = QDBusMessage::createMethodCall(SERVICE_NAME, BTSYNCD_NOTIF_PATH, BTSYNCD_NOTIF_IFACE, "Reply");
+        m2 << kim << longText;
+        CHECK(driver.call(m2, QDBus::BlockWithGui, 5000).arguments().value(0).toBool());
+        CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
+        CHECK(QString::fromUtf8(collector.feedback) == QStringLiteral("<action><id>95</id><ty>reply</ty><tx>") + longText.trimmed() + QStringLiteral("</tx></action>"));
+        CHECK(collector.largestPiece <= 182 && collector.feedback.size() > 182);
         spin(300);
         {
             QMutexLocker l(&fake.lock);
