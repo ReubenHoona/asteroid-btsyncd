@@ -30,6 +30,8 @@
 
 #include "common.h"
 
+#include <MDConfItem>
+
 BlueZManager::BlueZManager(QDBusObjectPath appPath, QDBusObjectPath advertPath, QObject *parent)
     : QObject(parent), mAppPath(appPath), mAdvertPath(advertPath), mAdapter("adapter"), mBus(QDBusConnection::systemBus())
 {
@@ -311,14 +313,21 @@ void BlueZManager::onConnectedChanged()
     QString appName, appIcon, summary, body;
     appName = "";
 
+    if(!mConnected) {
+        mAncs.disconnect();
+        mCts.disconnect();
+    }
+
+    // Wear OS shows no notification when the phone connects or goes: only the
+    // state (the launcher's phone toggle). The banners are opt-in.
+    if(!MDConfItem(CONNECTION_NOTICES_KEY).value(false).toBool())
+        return;
     if(mConnected) {
         //% "Connected"
         summary = qtTrId("id-connected");
         body = mConnectedDevice;
         appIcon = "ios-bluetooth-outline";
     } else {
-        mAncs.disconnect();
-        mCts.disconnect();
         //% "Disconnected"
         summary = qtTrId("id-disconnected");
         body = "";

@@ -35,6 +35,8 @@ class BlueZManager : public QObject
 public:
     explicit BlueZManager(QDBusObjectPath appPath, QDBusObjectPath advertPath, QObject *parent = 0);
     void updateConnected();
+    // A central (the phone) is connected
+    bool connected() const { return mConnected; }
 
 private:
     bool mConnected, mServicesResolved;

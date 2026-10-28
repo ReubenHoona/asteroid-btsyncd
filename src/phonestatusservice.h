@@ -110,7 +110,8 @@ public:
     PhoneStatusService(int index, QDBusConnection bus, NotificationService *notifications, QObject *parent = 0);
 
     static constexpr const char *DndKey = "/org/asteroidos/notifications/do-not-disturb";
-    // A phone gone for this long gets a quiet "Phone disconnected" card
+    // A phone gone for this long gets a quiet "Phone disconnected" card, if
+    // CONNECTION_NOTICES_KEY is on (off: Wear OS shows only the state)
     static const int DisconnectNoticeMs = 60 * 1000;
 
     // The status the phone wrote (the XML of one <ps> element)
@@ -123,8 +124,10 @@ public:
     bool doNotDisturb() const { return mDnd; }
     bool setDoNotDisturb(bool on);
     static QByteArray capabilities();
-    // For the tests: a shorter wait for the disconnected notice
+    // For the tests: a shorter wait for the disconnected notice, and the
+    // notice on or off whatever CONNECTION_NOTICES_KEY says
     void setDisconnectNoticeMs(int ms);
+    void setDisconnectNoticeEnabled(bool on) { mNoticeOverride = on ? 1 : 0; }
 
 signals:
     void connectedChanged(bool connected);
@@ -141,12 +144,14 @@ private:
     bool sendDndRequest();
     void closeDisconnectNotice();
     void closeStaleNotices();
+    bool disconnectNoticeEnabled() const;
 
     NotificationService *mNotifications;
     PhoneRequestsChrc *mRequests;
     MDConfItem *mDndConf;
     QTimer *mNoticeTimer;
     uint mNoticeId = 0;
+    int mNoticeOverride = -1;
     bool mWasConnected = false;
     int mBatteryLevel = -1;
     bool mCharging = false;

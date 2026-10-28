@@ -75,6 +75,13 @@
 #define WEAT_IDS_UUID     "00008002-0000-0000-0000-00A57E401D05"
 #define WEAT_MINT_UUID    "00008003-0000-0000-0000-00A57E401D05"
 #define WEAT_MAXT_UUID    "00008004-0000-0000-0000-00A57E401D05"
+#define WEAT_LOC_UUID     "00008005-0000-0000-0000-00A57E401D05"
+
+// dconf (bool, default false): notifications about the phone's connection (the
+// transient "Connected"/"Disconnected" banners and the "Phone disconnected" card
+// after a minute). Off like Wear OS, which shows only the state (the launcher's
+// phone toggle and its cross)
+#define CONNECTION_NOTICES_KEY "/org/asteroidos/btsyncd/connection-notices"
 
 #define BATTERY_UUID      "0000180F-0000-1000-8000-00805f9b34fb"
 #define BATTERY_LVL_UUID  "00002a19-0000-1000-8000-00805f9b34fb"

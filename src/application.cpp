@@ -37,6 +37,7 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     mPath = "/";
 
     NotificationService *notifications = new NotificationService(0, bus);
+    mNotifications = notifications;
     addService(notifications);
     addService(new WeatherService(1, bus));
     addService(new MediaService(2, bus));
@@ -69,6 +70,11 @@ QDBusObjectPath Application::getPath()
 void Application::addService(Service *service)
 {
     mServices.append(service);
+}
+
+void Application::setPhoneLink(bool connected)
+{
+    mNotifications->setLinkConnected(connected);
 }
 
 /* Exposed slots */

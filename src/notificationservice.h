@@ -104,7 +104,10 @@ class NotificationsFeedbackChrc : public Characteristic
 
 public:
     NotificationsFeedbackChrc(QDBusConnection bus, int index, Service *service);
-    void send(const QByteArray &xml, int mtu);
+    // Returns the number of notifications it took
+    int send(const QByteArray &xml, int mtu);
+    // The bytes one notification carries for an ATT MTU
+    static int chunkSize(int mtu);
     // A phone has subscribed (BlueZ StartNotify): it gets what is sent
     bool notifying() const { return mNotifying; }
 
@@ -182,6 +185,9 @@ public:
     static constexpr const char *CategoryHint = "x-asteroid-category";
     // A card the phone removed closes this much later (see removed())
     static const int CloseDelayMs = 1500;
+    // The phone's first update of a card within this long after a reply
+    // from the watch is the reply itself: no alert for it
+    static const int ReplyEchoMs = 60000;
 
     // Phone notification id -> lipstick notification id
     QHash<int, uint> mKnownAndroidNotifs;
@@ -224,7 +230,16 @@ public:
     // Find my phone (see NotificationsDBusApi::FindPhone)
     bool findPhone(bool start);
     bool findingPhone() const { return mFindingPhone; }
+    // The phone is there: connected (BlueZ) and subscribed to the feedback
     bool phoneConnected() const;
+    // The BlueZ link (BlueZManager): BlueZ keeps a bonded phone's subscriptions
+    // over a disconnection, without StopNotify (and without StartNotify when it
+    // is back), so the subscription alone does not say the phone is gone. Until
+    // this is called (the tests), the subscription decides.
+    void setLinkConnected(bool connected);
+    // After the link is back: the phone has set itself up again by then (service
+    // discovery, its subscriptions): queued dismissals are sent
+    static const int PhoneSetupMs = 5000;
     // The phone stopped ringing (found there, or its time ran out)
     void phoneStoppedRinging();
 
@@ -255,6 +270,8 @@ private:
     void setFindingPhone(bool ringing);
     void closeNow(uint lipstickId);
     void flushQueuedDismissals();
+    // phoneConnected() changed: signal, and what waited for the phone after flushDelayMs
+    void updatePhoneConnected(int flushDelayMs);
     static uint contentHash(const QString &summary, const QString &body);
 
     NotificationsFeedbackChrc *mFeedback;
@@ -268,6 +285,9 @@ private:
     QDBusServiceWatcher *mLipstickWatcher = nullptr;
     QTimer *mFindPhoneTimeout = nullptr;
     bool mFindingPhone = false;
+    bool mLinkKnown = false;
+    bool mLink = false;
+    bool mPhoneConnected = false;
     int mMtu = 23;
     bool mDoNotDisturb = false;
 
@@ -276,6 +296,8 @@ private:
     QHash<QString, uint> mThreads;
     QHash<uint, QString> mThreadOf;
     QHash<uint, uint> mContent;
+    // lipstick id -> when the watch replied to it
+    QHash<uint, qint64> mRepliedAt;
     // Cards the phone removed, closed a moment later: a conversation the app
     // re-posts (remove, then insert) keeps its card
     QHash<uint, int> mPendingClose;
