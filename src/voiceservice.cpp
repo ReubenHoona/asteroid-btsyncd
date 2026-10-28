@@ -202,6 +202,15 @@ VoiceService::VoiceService(int index, QDBusConnection bus, NotificationService *
         mState = Idle;
         emit failed(QStringLiteral("engine"));
     });
+    // A bonded phone out of range keeps its subscriptions (no StopNotify,
+    // see NotificationService::setLinkConnected): a session streaming to it
+    // ends when its link does, not 30 s + 10 s later with "timeout"
+    if (mNotifications) {
+        connect(mNotifications, &NotificationService::phoneConnectedChanged, this, [this](bool connected) {
+            if (!connected)
+                phoneGone("link");
+        });
+    }
     if (!session.registerObject(BTSYNCD_VOICE_PATH, mApi,
                                 QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals))
         fprintf(stderr, "VoiceService: cannot register %s on the session bus\n", BTSYNCD_VOICE_PATH);
@@ -674,12 +683,18 @@ void VoiceService::notifyChanged(VoiceNotifyChrc *chrc, bool on)
     qInfo() << "Voice:" << (chrc == mAudio ? "audio" : "event") << "notifications" << (on ? "on" : "off");
     if (on)
         return;
+    phoneGone("unsubscribed");
+}
+
+void VoiceService::phoneGone(const char *why)
+{
     // The phone unsubscribed or disconnected: it says again what it can
-    // when it is back
+    // when it is back (Gadgetbridge writes its state on every connection)
     mPhoneReady = false;
     mPhoneUnavailable.clear();
     // a reply recognised on the watch goes on (it needs the phone to send)
     if ((mState == Listening || mState == Recognising) && !mLocalSession && !mLocalPending) {
+        qInfo() << "Voice: session" << mSid << "ends, the phone is gone (" << why << ")";
         stopSource();
         mMaxTimer.stop();
         mResultTimer.stop();

@@ -28,6 +28,12 @@ add_executable(voicelocal_test voicelocal_test.cpp ../src/voiceservice.cpp ../sr
 target_include_directories(voicelocal_test PRIVATE ../src)
 target_link_libraries(voicelocal_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
+# A voice reply recognised by the phone ends when the phone's link drops
+add_executable(voicelink_test voicelink_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp
+	../src/notificationservice.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(voicelink_test PRIVATE ../src)
+target_link_libraries(voicelink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
 # The notification service on a private bus (see the top of the source):
 # dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS notifications_test'
 add_executable(notifications_test notifications_test.cpp ../src/notificationservice.cpp
