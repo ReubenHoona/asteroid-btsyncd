@@ -23,6 +23,8 @@
 
 #include <MDConfItem>
 #include <QDBusInterface>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDBusMessage>
 #include <QDBusReply>
 #include <QDebug>
@@ -238,17 +240,36 @@ uint VoiceService::startLocal(uint notificationId, const QString &source)
 {
     QDBusInterface a(QLatin1String(ASSISTANT_SERVICE), QLatin1String(ASSISTANT_PATH), QLatin1String(ASSISTANT_IFACE),
                      QDBusConnection::sessionBus());
-    // D-Bus may start the service first
+    // D-Bus may start the service first: not waited for here (this thread
+    // also serves the phone); its session comes with the reply or its first
+    // signal
     a.setTimeout(5000);
     const QString spec = sourceSpec(source);
-    const QDBusReply<uint> r = a.call(QStringLiteral("Dictate"), spec == QLatin1String("mic") ? QString() : spec);
-    if (!r.isValid() || r.value() == 0) {
-        qInfo() << "Voice: the watch's recogniser did not start:" << (r.isValid() ? QStringLiteral("refused") : r.error().message());
-        return 0;
-    }
-    mLocalSession = r.value();
+    QDBusPendingCallWatcher *w = new QDBusPendingCallWatcher(
+        a.asyncCall(QStringLiteral("Dictate"), spec == QLatin1String("mic") ? QString() : spec), this);
+    const quint8 sid = quint8(mSid % 255 + 1);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [this, w, sid, notificationId, source] {
+        w->deleteLater();
+        const QDBusPendingReply<uint> r = *w;
+        if (sid != mSid || !mLocalPending)
+            return;     // a newer session, or its result came first
+        mLocalPending = false;
+        if (r.isError() || r.value() == 0) {
+            qInfo() << "Voice: the watch's recogniser did not start:" << (r.isError() ? r.error().message() : QStringLiteral("refused"));
+            endLocal();
+            mState = Idle;
+            if (phoneAvailable() && startPhone(notificationId, source))
+                return;
+            emit failed(QStringLiteral("engine"));
+            return;
+        }
+        if (!mLocalSession)
+            mLocalSession = r.value();
+    });
+    mLocalPending = true;
+    mLocalSession = 0;
     mLocalSource = source;
-    mSid = quint8(mSid % 255 + 1);
+    mSid = sid;
     mNotificationId = notificationId;
     mLastPartial.clear();
     mFinal.clear();
@@ -261,12 +282,23 @@ uint VoiceService::startLocal(uint notificationId, const QString &source)
 void VoiceService::endLocal()
 {
     mLocalSession = 0;
+    mLocalPending = false;
     mLocalSource.clear();
+}
+
+bool VoiceService::localSession(uint session)
+{
+    // the first signal before Dictate() returns names the session
+    if (!mLocalSession && mLocalPending && session) {
+        mLocalSession = session;
+        mLocalPending = false;
+    }
+    return mLocalSession && session == mLocalSession;
 }
 
 void VoiceService::onLocalPartial(uint session, const QString &text)
 {
-    if (!mLocalSession || session != mLocalSession || mState != Listening)
+    if (!localSession(session) || mState != Listening)
         return;
     if (!text.isEmpty() && text != mLastPartial) {
         mLastPartial = text;
@@ -276,7 +308,7 @@ void VoiceService::onLocalPartial(uint session, const QString &text)
 
 void VoiceService::onLocalResult(uint session, const QString &json)
 {
-    if (!mLocalSession || session != mLocalSession)
+    if (!localSession(session))
         return;
     const QJsonObject r = QJsonDocument::fromJson(json.toUtf8()).object();
     const QString type = r.value(QStringLiteral("type")).toString();
@@ -420,7 +452,7 @@ bool VoiceService::stop()
 {
     if (mState != Listening)
         return false;
-    if (mLocalSession) {
+    if (mLocalSession || mLocalPending) {
         // the watch's recogniser decodes what it heard and gives the text
         QDBusInterface a(QLatin1String(ASSISTANT_SERVICE), QLatin1String(ASSISTANT_PATH), QLatin1String(ASSISTANT_IFACE),
                          QDBusConnection::sessionBus());
@@ -445,7 +477,7 @@ bool VoiceService::cancel()
         mFinal.clear();
         return false;
     }
-    if (mLocalSession) {
+    if (mLocalSession || mLocalPending) {
         QDBusInterface a(QLatin1String(ASSISTANT_SERVICE), QLatin1String(ASSISTANT_PATH), QLatin1String(ASSISTANT_IFACE),
                          QDBusConnection::sessionBus());
         a.asyncCall(QStringLiteral("Cancel"));
@@ -576,7 +608,7 @@ void VoiceService::notifyChanged(VoiceNotifyChrc *chrc, bool on)
     mPhoneReady = false;
     mPhoneUnavailable.clear();
     // a reply recognised on the watch goes on (it needs the phone to send)
-    if ((mState == Listening || mState == Recognising) && !mLocalSession) {
+    if ((mState == Listening || mState == Recognising) && !mLocalSession && !mLocalPending) {
         stopSource();
         mMaxTimer.stop();
         mResultTimer.stop();

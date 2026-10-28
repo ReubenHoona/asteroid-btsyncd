@@ -158,6 +158,7 @@ private:
     // On the watch: asteroid-assistant's Dictate, its signals relayed
     uint startLocal(uint notificationId, const QString &source);
     void endLocal();
+    bool localSession(uint session);
 
     NotificationService *mNotifications;
     VoiceNotifyChrc *mEvent;
@@ -183,6 +184,7 @@ private:
     QString mFinal;
     // a session of asteroid-assistant's (0: none), and what to fall back on
     uint mLocalSession = 0;
+    bool mLocalPending = false;     // Dictate() asked, its session not known yet
     QString mLocalSource;
     QTimer mMaxTimer;
     QTimer mResultTimer;
