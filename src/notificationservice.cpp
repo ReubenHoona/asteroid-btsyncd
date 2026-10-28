@@ -499,13 +499,8 @@ NotificationService::NotificationService(int index, QDBusConnection bus, QObject
 
     // A phone that disconnects (or unsubscribes) is not ringing any more;
     // one that does not stop by itself is stopped after a while
-    connect(mFeedback, &NotificationsFeedbackChrc::notifyingChanged, this, [this](bool notifying) {
-        if(!notifying)
-            setFindingPhone(false);
-        // What was dismissed meanwhile, once the phone has set itself up
-        else if(!mQueuedDismissals.isEmpty())
-            QTimer::singleShot(1500, this, &NotificationService::flushQueuedDismissals);
-        emit phoneConnectedChanged(notifying);
+    connect(mFeedback, &NotificationsFeedbackChrc::notifyingChanged, this, [this](bool) {
+        updatePhoneConnected(1500);
     });
     mFindPhoneTimeout = new QTimer(this);
     mFindPhoneTimeout->setSingleShot(true);
@@ -629,7 +624,7 @@ void NotificationService::sendFeedback(int phoneId, const QString &type, const Q
 {
     // A dismiss waits for the phone (at most an hour, the newest 64): it
     // would otherwise come back with the phone's resync after a reconnection
-    if(type == QLatin1String("dismiss") && !mFeedback->notifying()) {
+    if(type == QLatin1String("dismiss") && !phoneConnected()) {
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         mQueuedDismissals << qMakePair(phoneId, now);
         while(mQueuedDismissals.size() > 64)
@@ -650,7 +645,7 @@ void NotificationService::sendFeedback(int phoneId, const QString &type, const Q
     w.writeEndElement();
     // What went to the phone, without the text of a reply
     qInfo() << "Feedback to the phone:" << type << "for" << phoneId << (index >= 0 ? QString("index %1").arg(index) : QString())
-            << (mFeedback->notifying() ? "" : "(no phone subscribed)");
+            << (phoneConnected() ? "" : "(no phone connected)");
     mFeedback->send(xml, mMtu);
 }
 
@@ -670,7 +665,33 @@ int NotificationService::appActionIndex(const QString &key)
 
 bool NotificationService::phoneConnected() const
 {
-    return mFeedback->notifying();
+    return mFeedback->notifying() && (!mLinkKnown || mLink);
+}
+
+void NotificationService::setLinkConnected(bool connected)
+{
+    if(mLinkKnown && connected == mLink)
+        return;
+    mLinkKnown = true;
+    mLink = connected;
+    qInfo() << "Phone link:" << (connected ? "connected" : "disconnected")
+            << (mFeedback->notifying() ? "" : "(not subscribed)");
+    updatePhoneConnected(PhoneSetupMs);
+}
+
+void NotificationService::updatePhoneConnected(int flushDelayMs)
+{
+    const bool connected = phoneConnected();
+    if(connected == mPhoneConnected)
+        return;
+    mPhoneConnected = connected;
+    // A phone that is gone is not ringing any more
+    if(!connected)
+        setFindingPhone(false);
+    // What was dismissed meanwhile, once the phone has set itself up
+    else if(!mQueuedDismissals.isEmpty())
+        QTimer::singleShot(flushDelayMs, this, &NotificationService::flushQueuedDismissals);
+    emit phoneConnectedChanged(connected);
 }
 
 bool NotificationService::findPhone(bool start)
@@ -1012,7 +1033,7 @@ void NotificationService::closeNow(uint lipstickId)
 
 void NotificationService::flushQueuedDismissals()
 {
-    if(!mFeedback->notifying())
+    if(!phoneConnected())
         return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     const QList<QPair<int, qint64>> queued = mQueuedDismissals;

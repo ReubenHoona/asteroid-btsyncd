@@ -170,6 +170,13 @@ void PhoneStatusService::setDisconnectNoticeMs(int ms)
     mNoticeTimer->setInterval(ms);
 }
 
+bool PhoneStatusService::disconnectNoticeEnabled() const
+{
+    if(mNoticeOverride >= 0)
+        return mNoticeOverride == 1;
+    return MDConfItem(CONNECTION_NOTICES_KEY).value(false).toBool();
+}
+
 bool PhoneStatusService::connected() const
 {
     return mNotifications->phoneConnected();
@@ -226,7 +233,7 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
 bool PhoneStatusService::setDoNotDisturb(bool on)
 {
     setDnd(on, false);
-    return mRequests->notifying();
+    return connected() && mRequests->notifying();
 }
 
 void PhoneStatusService::dndConfChanged()
@@ -254,7 +261,9 @@ void PhoneStatusService::setDnd(bool on, bool fromPhone)
 
 bool PhoneStatusService::sendDndRequest()
 {
-    if(!mRequests->notifying())
+    // A bonded phone's subscription outlives its connection (see
+    // NotificationService::setLinkConnected): the phone must be there too
+    if(!connected() || !mRequests->notifying())
         return false;
     mDndPendingSince = QDateTime::currentMSecsSinceEpoch();
     mRequests->send(mDnd ? QByteArrayLiteral("<req><dnd>on</dnd></req>") : QByteArrayLiteral("<req><dnd>off</dnd></req>"));
@@ -263,12 +272,20 @@ bool PhoneStatusService::sendDndRequest()
 
 void PhoneStatusService::phoneConnectedChanged(bool connected)
 {
+    qInfo() << "Phone:" << (connected ? "connected" : "disconnected");
     emit connectedChanged(connected);
     if(connected) {
         mWasConnected = true;
         mNoticeTimer->stop();
         closeDisconnectNotice();
-    } else if(mWasConnected) {
+        // Back with the subscription BlueZ kept: the watch's choice, once the
+        // phone has set itself up again
+        if(mDndPending)
+            QTimer::singleShot(NotificationService::PhoneSetupMs, this, [this] {
+                if(mDndPending)
+                    sendDndRequest();
+            });
+    } else if(mWasConnected && disconnectNoticeEnabled()) {
         // Gone for a while (not a quick reconnection): a quiet card
         mNoticeTimer->start();
     }

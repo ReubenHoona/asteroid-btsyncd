@@ -167,7 +167,10 @@ VoiceService::VoiceService(int index, QDBusConnection bus, NotificationService *
 
 bool VoiceService::available() const
 {
-    return (mPhoneReady || mAudio->notifying()) && mPhoneUnavailable.isEmpty();
+    // A bonded phone keeps its subscription when it goes (see
+    // NotificationService::setLinkConnected): it must be connected as well
+    return (mPhoneReady || mAudio->notifying()) && mPhoneUnavailable.isEmpty()
+            && (!mNotifications || mNotifications->phoneConnected());
 }
 
 QString VoiceService::state() const

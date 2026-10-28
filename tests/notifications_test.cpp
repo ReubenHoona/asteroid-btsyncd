@@ -21,6 +21,8 @@
  *   - app icons: stored as SVG, used by name, bad icons refused
  *   - a dismiss while no phone is subscribed waits for it; its resync does
  *     not bring the card back
+ *   - the same while the link is gone but BlueZ kept the subscription (a
+ *     bonded phone): sent after the phone's setup once the link is back
  */
 
 #include "notificationservice.h"
@@ -540,6 +542,34 @@ int main(int argc, char **argv)
     CHECK(gattCall(driver, CHR_FEEDBACK, "StartNotify", {}).type() == QDBusMessage::ReplyMessage);
     CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }, 4000));
     CHECK(collector.feedback == "<action><id>90</id><ty>dismiss</ty></action>");
+
+    // The link goes, BlueZ keeps the subscription (a bonded phone out of range):
+    // a dismiss waits as well, and goes out once the phone is back and set up
+    service.setLinkConnected(true);
+    CHECK(service.phoneConnected());
+    write(driver, "<insert><id>91</id><vb>none</vb><an>Mail</an><su>Ida</su><bo>Hi</bo></insert>");
+    CHECK(waitFor([&] { return postedCount(fake) == before + 16; }));
+    uint ida = 0;
+    {
+        QMutexLocker l(&fake.lock);
+        ida = fake.nextId - 1;
+    }
+    service.setLinkConnected(false);
+    CHECK(!service.phoneConnected());
+    collector.feedback.clear();
+    {
+        QDBusMessage s = QDBusMessage::createSignal("/org/freedesktop/Notifications", "org.freedesktop.Notifications", "NotificationClosed");
+        s << ida << 2u;
+        fakeConn.send(s);
+    }
+    spin(300);
+    CHECK(collector.feedback.isEmpty());
+    service.setLinkConnected(true);
+    CHECK(service.phoneConnected());
+    spin(1000);
+    CHECK(collector.feedback.isEmpty());   // the phone is still setting itself up
+    CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }, NotificationService::PhoneSetupMs + 3000));
+    CHECK(collector.feedback == "<action><id>91</id><ty>dismiss</ty></action>");
 
     // The decisions on their own
     {
