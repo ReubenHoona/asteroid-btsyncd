@@ -188,6 +188,17 @@ int main(int argc, char **argv)
     writeStatus(driver, "<ps><bl>83</bl><bc>1</bc></ps>");
     spin(200);
     CHECK(collector.batteryChanges.size() == 1);
+    // A long write split inside the closing tag
+    writeStatus(driver, "<ps><bl>61</bl><bc>1</bc></p");
+    writeStatus(driver, "s>");
+    CHECK(waitFor([&] { return collector.batteryChanges.size() == 2; }));
+    CHECK(api(driver, "BatteryLevel").toInt() == 61);
+    // The rest of a status lost (a disconnection), then a whole one: that one
+    writeStatus(driver, "<ps><bl>5");
+    writeStatus(driver, "<ps><bl>62</bl><bc>1</bc></ps>");
+    CHECK(waitFor([&] { return collector.batteryChanges.size() == 3; }));
+    CHECK(api(driver, "BatteryLevel").toInt() == 62);
+    CHECK(collector.batteryChanges == QList<int>() << 83 << 61 << 62);
 
     // The user switches DND off on the watch: the phone is told
     CHECK(api(driver, "SetDoNotDisturb", {false}).toBool() == true);

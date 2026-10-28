@@ -17,6 +17,7 @@
 
 #include "phonestatusservice.h"
 #include "common.h"
+#include "messagejoiner.h"
 #include "notificationservice.h"
 #include "wakehold.h"
 
@@ -34,30 +35,26 @@ class PhoneStatusChrc : public Characteristic
 {
 public:
     PhoneStatusChrc(QDBusConnection bus, unsigned int index, PhoneStatusService *service)
-      : Characteristic(bus, index, PHONE_STATUS_UUID, {"encrypt-authenticated-write"}, service, service), mService(service) {}
+      : Characteristic(bus, index, PHONE_STATUS_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
+        mJoiner("Phone status", {"ps"}, 4096) {}
 
 public slots:
     void WriteValue(QByteArray value, QVariantMap options)
     {
-        Q_UNUSED(options);
         // Woken by the phone: hold until the status is applied
         WakeHoldScope wake;
-        mBuffer += value;
-        if(mBuffer.size() > 4096) {
-            qWarning() << "Phone status without an end, dropped";
-            mBuffer.clear();
-            return;
+        // Joined like the notifications: a long write may end inside </ps>,
+        // and the rest of a status cut by a disconnection is dropped when
+        // the next one begins
+        for(const auto &message : mJoiner.add(value, MessageJoiner::offsetOf(options))) {
+            if(message.first == "ps")
+                mService->applyStatus(message.second);
         }
-        if(!value.endsWith("</ps>"))
-            return;
-        const QByteArray xml = mBuffer;
-        mBuffer.clear();
-        mService->applyStatus(xml);
     }
 
 private:
     PhoneStatusService *mService;
-    QByteArray mBuffer;
+    MessageJoiner mJoiner;
 };
 
 class PhoneCapabilitiesChrc : public Characteristic

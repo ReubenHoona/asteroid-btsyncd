@@ -18,6 +18,7 @@
 #include "mediaservice.h"
 #include "characteristic.h"
 #include "common.h"
+#include "messagejoiner.h"
 #include "wakehold.h"
 
 #include <QDebug>
@@ -110,25 +111,28 @@ class MediaStateChrc : public Characteristic
 {
 public:
     MediaStateChrc(MprisPlayer *player, QDBusConnection bus, int index, Service *service)
-        : Characteristic(bus, index, MEDIA_STATE_UUID, {"encrypt-authenticated-write"}, service), m_player(player) {}
+        : Characteristic(bus, index, MEDIA_STATE_UUID, {"encrypt-authenticated-write"}, service), m_player(player),
+          m_joiner("Media state", {"mp"}, 4096) {}
 
 private:
     MprisPlayer *m_player;
-    QByteArray m_buffer;
+    // Joined like the notifications: a long write may end inside </mp>
+    MessageJoiner m_joiner;
 
 public slots:
-    void WriteValue(QByteArray value, QVariantMap)
+    void WriteValue(QByteArray value, QVariantMap options)
     {
         WakeHoldScope wake;
-        m_buffer += value;
-        if(m_buffer.size() > 4096) {
-            m_buffer.clear();
-            return;
+        for(const auto &message : m_joiner.add(value, MessageJoiner::offsetOf(options))) {
+            if(message.first == "mp")
+                apply(message.second);
         }
-        if(!value.endsWith("</mp>"))
-            return;
-        QXmlStreamReader reader(m_buffer);
-        m_buffer.clear();
+    }
+
+private:
+    void apply(const QByteArray &xml)
+    {
+        QXmlStreamReader reader(xml);
         if(!reader.readNextStartElement() || reader.name() != QLatin1String("mp"))
             return;
         while(reader.readNextStartElement()) {
