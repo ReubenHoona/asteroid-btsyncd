@@ -18,6 +18,7 @@
 #include "assistantservice.h"
 #include "assistantprotocol.h"
 #include "common.h"
+#include "notificationservice.h"
 #include "wakehold.h"
 
 #include <QDBusConnection>
@@ -134,8 +135,8 @@ bool AssistantDBusApi::Available() { return mService->available(); }
 bool AssistantDBusApi::Ask(uint id, const QString &request) { return mService->ask(id, request.toUtf8()); }
 bool AssistantDBusApi::Cancel(uint id) { return mService->cancel(id); }
 
-AssistantService::AssistantService(int index, QDBusConnection bus, QObject *parent)
-    : Service(bus, index, ASSISTANT_UUID, parent)
+AssistantService::AssistantService(int index, QDBusConnection bus, NotificationService *notifications, QObject *parent)
+    : Service(bus, index, ASSISTANT_UUID, parent), mNotifications(notifications)
 {
     mRequests = new AssistantRequestsChrc(bus, 0, this);
     addCharacteristic(mRequests);
@@ -144,6 +145,16 @@ AssistantService::AssistantService(int index, QDBusConnection bus, QObject *pare
 
     mTimeout.setSingleShot(true);
     connect(&mTimeout, &QTimer::timeout, this, &AssistantService::expire);
+
+    // A bonded phone out of range keeps its subscription: without this the
+    // relay stayed "available", asteroid-assistant sent its questions into the
+    // void and failed after its own timeout instead of asking the server
+    if (mNotifications) {
+        connect(mNotifications, &NotificationService::phoneConnectedChanged, this, [this](bool connected) {
+            if (!connected)
+                phoneGone("link");
+        });
+    }
 
     mApi = new AssistantDBusApi(this);
     QDBusConnection session = QDBusConnection::sessionBus();
@@ -154,7 +165,7 @@ AssistantService::AssistantService(int index, QDBusConnection bus, QObject *pare
 
 bool AssistantService::available() const
 {
-    return mRequests->notifying() && mPhoneReady;
+    return mRequests->notifying() && mPhoneReady && (!mNotifications || mNotifications->phoneConnected());
 }
 
 bool AssistantService::ask(uint id, const QByteArray &request)
@@ -217,10 +228,21 @@ void AssistantService::notifyChanged(bool on)
     qInfo() << "Assistant: relay notifications" << (on ? "on" : "off");
     if (on)
         return;
-    // the phone went away: it says again whether it relays when it is back
+    phoneGone("unsubscribed");
+}
+
+void AssistantService::phoneGone(const char *why)
+{
+    // it says again whether it relays when it is back (Gadgetbridge writes
+    // its state on every connection), and with the MTU of that connection
+    const bool wasReady = mPhoneReady;
     mPhoneReady = false;
+    mMtu = 0;
+    mTimeout.stop();
     const QSet<uint> waiting = mWaiting;
     mWaiting.clear();
+    if (wasReady || !waiting.isEmpty())
+        qInfo() << "Assistant: the phone is gone (" << why << "):" << waiting.size() << "question(s) failed";
     for (uint id : waiting)
         emit failed(id, QStringLiteral("disconnected"));
 }
