@@ -158,7 +158,8 @@ private:
     // On the watch: asteroid-assistant's Dictate, its signals relayed
     uint startLocal(uint notificationId, const QString &source);
     void endLocal();
-    bool localSession(uint session);
+    // Drops asteroid-assistant's session without starting the service
+    static void cancelAssistant();
 
     NotificationService *mNotifications;
     VoiceNotifyChrc *mEvent;
@@ -185,6 +186,10 @@ private:
     // a session of asteroid-assistant's (0: none), and what to fall back on
     uint mLocalSession = 0;
     bool mLocalPending = false;     // Dictate() asked, its session not known yet
+    // A Result that came before Dictate()'s reply (a session that failed at
+    // once, or another session's): taken only if the reply names its session
+    uint mEarlySession = 0;
+    QString mEarlyResult;
     QString mLocalSource;
     QTimer mMaxTimer;
     QTimer mResultTimer;
