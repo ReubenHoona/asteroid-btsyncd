@@ -160,6 +160,8 @@ private:
     void endLocal();
     // Drops asteroid-assistant's session without starting the service
     static void cancelAssistant();
+    // The phone is gone (unsubscribed, or its BlueZ link dropped)
+    void phoneGone(const char *why);
 
     NotificationService *mNotifications;
     VoiceNotifyChrc *mEvent;
