@@ -82,6 +82,9 @@ struct PostPlan
     bool vibrate = false;
 
     static PostPlan decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb);
+    // The ngfd event (lipstick's x-nemo-feedback) of a notification that
+    // vibrates, from the phone's <vb>
+    static QString feedbackEvent(const PhoneNotification &n);
 };
 
 /*
