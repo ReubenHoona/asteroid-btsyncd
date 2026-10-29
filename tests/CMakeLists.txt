@@ -34,6 +34,12 @@ add_executable(voicelink_test voicelink_test.cpp ../src/voiceservice.cpp ../src/
 target_include_directories(voicelink_test PRIVATE ../src)
 target_link_libraries(voicelink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
+# The calls on the watch with a fake oFono and BlueZ, on a private bus like
+# notifications_test
+add_executable(calls_test calls_test.cpp ../src/callaudio.cpp)
+target_include_directories(calls_test PRIVATE ../src)
+target_link_libraries(calls_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE)
+
 # The notification service on a private bus (see the top of the source):
 # dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS notifications_test'
 add_executable(notifications_test notifications_test.cpp ../src/notificationservice.cpp

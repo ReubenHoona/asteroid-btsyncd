@@ -48,6 +48,8 @@
 #define BTSYNCD_PHONE_PATH           "/org/asteroidos/btsyncd/phone"
 #define BTSYNCD_PHONE_IFACE          "org.asteroidos.btsyncd.Phone"
 #define BTSYNCD_ASSISTANT_PATH       "/org/asteroidos/btsyncd/assistant"
+#define BTSYNCD_CALLS_PATH           "/org/asteroidos/btsyncd/calls"
+#define BTSYNCD_CALLS_IFACE          "org.asteroidos.btsyncd.Calls"
 #define SCREENSHOT_SERVICE_NAME      "org.nemomobile.lipstick"
 #define SCREENSHOT_MAIN_IFACE        "org.nemomobile.lipstick"
 #define SCREENSHOT_PATH_BASE         "/org/nemomobile/lipstick/screenshot"
