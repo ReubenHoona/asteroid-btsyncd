@@ -57,6 +57,10 @@ struct PhoneNotification
     bool ongoing = false;
     QString category;
     QString iconHash;
+    // Its picture (watches with <pictures> in their capabilities): the picture's id and the
+    // size it comes at, <pc><i>ID</i><w>W</w><h>H</h></pc>
+    QString pictureId;
+    int pictureWidth = 0, pictureHeight = 0;
 
     // Reads the children of the <insert> element the reader is on
     static PhoneNotification parse(QXmlStreamReader &reader);
@@ -100,6 +104,9 @@ struct PostPlan
  *   ty=app, ix=N      the phone's own action N of the notification's <ax>
  *   ty=found          the find-my-watch alert was found
  *   ty=findphone, id=0, tx=start|stop   ring the phone / stop ringing it
+ * and with notification pictures (<pictures> in the capabilities):
+ *   ty=picture, tx=ID the watch has not got the picture the notification's <pc>
+ *                     names: the phone writes it to the picture characteristic
  * A dismiss while no phone is subscribed waits (version 4) and goes out
  * when a phone subscribes again.
  */
@@ -165,11 +172,19 @@ public slots:
     bool FindingPhone();
     // A phone is connected and subscribed to the feedback
     bool PhoneConnected();
+    /*
+     * A notification's picture (the file its x-asteroid-picture hint names): 1 here,
+     * 0 on its way from the phone, 2 not to be had (the phone cannot send it, the
+     * phone is away, no card shows it). PictureChanged says when that changes.
+     */
+    int PictureState(const QString &path);
 
 signals:
     void FindPhoneChanged(bool ringing);
     // The phone (dis)connected: subscribed to the feedback or not any more
     void PhoneConnectedChanged(bool connected);
+    // A notification picture arrived (available), or will not come (not available)
+    void PictureChanged(const QString &path, bool available);
 
 private:
     NotificationService *mService;
@@ -237,6 +252,43 @@ public:
     static bool storeIcon(const QString &packageName, const QString &hash, const QByteArray &base64Png);
     static QByteArray capabilities();
 
+    /*
+     * Notification pictures (capabilities <pictures>, see NotificationsPictureChrc): a
+     * picture is a JPEG of at most PictureSide pixels a side and MaxPictureBytes,
+     * kept in ~/.cache/asteroid-btsyncd/pictures/ID.jpg while a card shows it. The
+     * card's hints: PictureHint, the file (there or not yet), PictureSizeHint "WxH".
+     */
+    static constexpr const char *PictureHint = "x-asteroid-picture";
+    static constexpr const char *PictureSizeHint = "x-asteroid-picture-size";
+    static const int PictureSide = 384;
+    static const int MaxPictureBytes = 24 * 1024;
+    // The cache: at most this many pictures and bytes (the oldest go first, those of
+    // no card before those of a card)
+    static const int MaxPictures = 128;
+    static const int MaxPictureCacheBytes = 4 * 1024 * 1024;
+    // A picture asked for is not asked for again within this long (unless the phone
+    // came back meanwhile); one that has not come after PictureTimeoutMs is given up
+    static const int PictureRetryMs = 60 * 1000;
+    static const int PictureTimeoutMs = 120 * 1000;
+    // The files of the cards that went are deleted this much later (a card posted
+    // anew with the same picture keeps it)
+    static const int PicturePruneDelayMs = 3000;
+    enum PictureState { PicturePending = 0, PictureReady = 1, PictureUnavailable = 2 };
+    static QString pictureDir();
+    static bool isPictureId(const QString &id);
+    // "" for an id that is not one
+    static QString picturePath(const QString &id);
+    // Checks a picture from the phone (size, hash, a whole JPEG) and writes it to the cache
+    static bool storePicture(const QString &id, const QString &hash, int size, const QByteArray &base64Jpeg);
+    // What the phone wrote to the picture characteristic: the picture (hasData), or that it
+    // cannot send it; elapsedMs from its first write
+    void pictureArrived(int phoneId, const QString &id, const QString &hash, int size,
+                        const QByteArray &base64Jpeg, bool hasData, qint64 elapsedMs);
+    int pictureState(const QString &path) const;
+    void setPicturePruneDelayMs(int ms) { mPicturePruneDelayMs = ms; }
+    void setPictureTimeoutMs(int ms) { mPictureTimeoutMs = ms; }
+    void setPictureCacheLimits(int pictures, int bytes) { mMaxPictures = pictures; mMaxPictureCacheBytes = bytes; }
+
     bool reply(uint notificationId, const QString &text);
     bool silence(uint notificationId);
 
@@ -264,6 +316,7 @@ public:
 signals:
     void findPhoneChanged(bool ringing);
     void phoneConnectedChanged(bool connected);
+    void pictureChanged(const QString &path, bool available);
 
 public:
     // What the phone offered for a notification (by lipstick id), and for a
@@ -286,6 +339,15 @@ private:
     // phoneConnected() changed: signal, and what waited for the phone after flushDelayMs
     void updatePhoneConnected(int flushDelayMs);
     static uint contentHash(const QString &summary, const QString &body);
+    // The picture a card shows (lipstick id), asked for from the phone when it is not here
+    void setPicture(uint lipstickId, int phoneId, const QString &id);
+    void requestPicture(int phoneId, const QString &id);
+    bool pictureShown(const QString &id) const;
+    void pictureUnavailable(const QString &id, const char *why);
+    // Deletes (PicturePruneDelayMs later) the pictures no card shows, and keeps the
+    // cache within its limits
+    void schedulePicturePrune();
+    void prunePictures();
 
     NotificationsFeedbackChrc *mFeedback;
     // Lipstick ids whose close follows an action already reported to the
@@ -325,6 +387,20 @@ private:
     // phone subscribes; the phone's resync must not bring them back
     QList<QPair<int, qint64>> mQueuedDismissals;
     QHash<int, qint64> mDismissedAway;
+
+    // Notification pictures: the picture of each card (lipstick id -> picture id); when
+    // each was asked for, how often one came broken, the ones the phone cannot send
+    QHash<uint, QString> mPictureOf;
+    QHash<QString, qint64> mPictureRequested;
+    QHash<QString, int> mPictureFailures;
+    QSet<QString> mPicturesUnavailable;
+    // lipstick's list was read: the cache's other files are no card's
+    bool mPicturesKnown = false;
+    QTimer *mPicturePrune = nullptr;
+    int mPicturePruneDelayMs = PicturePruneDelayMs;
+    int mPictureTimeoutMs = PictureTimeoutMs;
+    int mMaxPictures = MaxPictures;
+    int mMaxPictureCacheBytes = MaxPictureCacheBytes;
 };
 
 #endif // NOTIFICATIONSERVICE_H

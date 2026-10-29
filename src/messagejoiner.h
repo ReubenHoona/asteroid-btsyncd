@@ -99,6 +99,9 @@ public:
         return messages;
     }
 
+    // Nothing of a message is waiting for its end
+    bool idle() const { return mBuffer.isEmpty(); }
+
     // Drops an incomplete message (logged)
     void drop(const char *why)
     {

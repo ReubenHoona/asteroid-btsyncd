@@ -24,6 +24,7 @@
 #include <MDConfItem>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -105,6 +106,10 @@ QByteArray NotificationService::capabilities()
         // Each insert's notification key (<ky>), and the phone's whole list after a
         // resync (<sync>): a notification keeps its card, a removed one goes
         "<sync>1</sync>"
+        // Notification pictures: the longest side and the largest JPEG taken (<pc> in an
+        // insert, feedback ty=picture, the picture characteristic)
+        "<pictures>" + QByteArray::number(PictureSide) + "</pictures>"
+        "<picturebytes>" + QByteArray::number(MaxPictureBytes) + "</picturebytes>"
         "</capabilities>";
 }
 
@@ -175,6 +180,21 @@ PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
             n.category = reader.readElementText().trimmed().left(32);
         else if(name == QLatin1String("ic"))
             n.iconHash = reader.readElementText().trimmed();
+        else if(name == QLatin1String("pc")) {
+            // <pc><i>ID</i><w>W</w><h>H</h></pc>: the picture, and its size
+            while(reader.readNextStartElement()) {
+                if(reader.name() == QLatin1String("i"))
+                    n.pictureId = reader.readElementText().trimmed();
+                else if(reader.name() == QLatin1String("w"))
+                    n.pictureWidth = qBound(0, reader.readElementText().trimmed().toInt(), 4096);
+                else if(reader.name() == QLatin1String("h"))
+                    n.pictureHeight = qBound(0, reader.readElementText().trimmed().toInt(), 4096);
+                else
+                    reader.skipCurrentElement();
+            }
+            if(!NotificationService::isPictureId(n.pictureId))
+                n.pictureId.clear();
+        }
         else reader.skipCurrentElement();
     }
     for(QString &a : n.phoneActions)
@@ -279,6 +299,7 @@ static QString describe(const PhoneNotification &n, int bytes)
     if(n.ongoing) flags << "ongoing";
     if(!n.category.isEmpty()) flags << "category " + n.category;
     if(!n.iconHash.isEmpty()) flags << "icon";
+    if(!n.pictureId.isEmpty()) flags << "picture";
     if(!n.phoneActions.isEmpty()) flags << "actions " + n.phoneActions.join(',');
     if(!n.key.isEmpty()) flags << "key";
     return QString("Phone notification %1: insert (%2 bytes) from %3, title %4 chars, body %5 chars, vibration %6%7")
@@ -437,6 +458,87 @@ private:
 };
 
 /*
+ * Notification pictures (capabilities <pictures>SIDE</pictures><picturebytes>MAX</picturebytes>),
+ * as Wear OS shows a message's picture in its notification:
+ *   1. the phone's <insert> names its picture and the size it comes at,
+ *      <pc><i>ID</i><w>W</w><h>H</h></pc> (ID: 16 hex digits, a hash of the picture);
+ *      the card gets the hints x-asteroid-picture (the file, ~/.cache/asteroid-btsyncd/
+ *      pictures/ID.jpg, there or not yet) and x-asteroid-picture-size ("WxH")
+ *   2. the watch asks for a picture it does not have: feedback ty=picture, tx=ID
+ *      (once a minute at most, again when the phone is back)
+ *   3. the phone writes it here, in as many writes as needed:
+ *        <pic><id>PHONE ID</id><pc>ID</pc><h>HASH</h><sz>BYTES</sz><d>BASE64 JPEG</d></pic>
+ *      HASH: the first 16 hex digits of the JPEG's SHA-256; without <d>: the phone cannot
+ *      send it (gone, unreadable, larger than MAX at any quality)
+ *   4. the launcher shows it once there (PictureChanged on the session bus API)
+ * A picture is kept while a card shows it (also over a reboot: lipstick keeps its cards);
+ * the cache keeps at most MaxPictures and MaxPictureCacheBytes.
+ */
+class NotificationsPictureChrc : public Characteristic
+{
+public:
+    NotificationsPictureChrc(QDBusConnection bus, unsigned int index, NotificationService *service)
+      : Characteristic(bus, index, NOTI_PIC_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
+        mJoiner("Notification picture", {"pic"}, 48 * 1024)
+    {
+        // A picture cut by the disconnection never ends: the watch asks again when the
+        // phone is back
+        QObject::connect(service, &NotificationService::phoneConnectedChanged, this, [this](bool connected) {
+            if(!connected)
+                mJoiner.drop("the phone is gone");
+        });
+    }
+
+public slots:
+    void WriteValue(QByteArray value, QVariantMap options)
+    {
+        // The writes of a picture follow each other: autosleep waits for its end
+        WakeHold::hold();
+        mService->setMtu(optionMtu(options));
+        if(mJoiner.idle())
+            mStarted.start();
+        bool done = false;
+        for(const auto &message : mJoiner.add(value, optionOffset(options))) {
+            done = true;
+            if(message.first != "pic") {
+                qWarning() << "Notification picture: unknown message" << message.first << "dropped";
+                continue;
+            }
+            QXmlStreamReader reader(message.second);
+            int phoneId = 0, size = -1;
+            QString id, hash;
+            QByteArray data;
+            bool hasData = false;
+            if(reader.readNextStartElement() && reader.name() == QLatin1String("pic")) {
+                while(reader.readNextStartElement()) {
+                    if(reader.name() == QLatin1String("id")) phoneId = reader.readElementText().toInt();
+                    else if(reader.name() == QLatin1String("pc")) id = reader.readElementText().trimmed();
+                    else if(reader.name() == QLatin1String("h")) hash = reader.readElementText().trimmed();
+                    else if(reader.name() == QLatin1String("sz")) size = reader.readElementText().trimmed().toInt();
+                    else if(reader.name() == QLatin1String("d")) {
+                        data = reader.readElementText().toLatin1();
+                        hasData = true;
+                    }
+                    else reader.skipCurrentElement();
+                }
+            }
+            if(reader.hasError()) {
+                qWarning() << "Notification picture: a message of" << message.second.size() << "bytes could not be read:" << reader.errorString();
+                continue;
+            }
+            mService->pictureArrived(phoneId, id, hash, size, data, hasData, mStarted.isValid() ? mStarted.elapsed() : 0);
+        }
+        if(done && mJoiner.idle())
+            WakeHold::release(WakeHold::GRACE_SHORT_MS);
+    }
+
+private:
+    NotificationService *mService;
+    MessageJoiner mJoiner;
+    QElapsedTimer mStarted;
+};
+
+/*
  * Phone to watch: the canned replies the watch offers, as
  * <replies><r>TEXT</r>...</replies>, in as many writes as needed. Stored in
  * dconf for the launcher.
@@ -567,6 +669,7 @@ NotificationsDBusApi::NotificationsDBusApi(NotificationService *service)
 {
     connect(service, &NotificationService::findPhoneChanged, this, &NotificationsDBusApi::FindPhoneChanged);
     connect(service, &NotificationService::phoneConnectedChanged, this, &NotificationsDBusApi::PhoneConnectedChanged);
+    connect(service, &NotificationService::pictureChanged, this, &NotificationsDBusApi::PictureChanged);
 }
 
 bool NotificationsDBusApi::Reply(uint notificationId, const QString &text)
@@ -594,6 +697,11 @@ bool NotificationsDBusApi::PhoneConnected()
     return mService->phoneConnected();
 }
 
+int NotificationsDBusApi::PictureState(const QString &path)
+{
+    return mService->pictureState(path);
+}
+
 NotificationService::NotificationService(int index, QDBusConnection bus, QObject *parent) : Service(bus, index, NOTIF_UUID, parent)
 {
     mFeedback = new NotificationsFeedbackChrc(bus, 1, this);
@@ -602,6 +710,10 @@ NotificationService::NotificationService(int index, QDBusConnection bus, QObject
     addCharacteristic(new NotificationsRepliesChrc(bus, 2, this));
     addCharacteristic(new NotificationsCapabilitiesChrc(bus, 3, this));
     addCharacteristic(new NotificationsIconChrc(bus, 4, this));
+    addCharacteristic(new NotificationsPictureChrc(bus, 5, this));
+    mPicturePrune = new QTimer(this);
+    mPicturePrune->setSingleShot(true);
+    connect(mPicturePrune, &QTimer::timeout, this, &NotificationService::prunePictures);
 
     QDBusConnection session = QDBusConnection::sessionBus();
     session.connect(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE,
@@ -655,6 +767,7 @@ void NotificationService::restoreKnown()
     QHash<uint, QString> threads;
     QHash<uint, QString> keyHashes;
     QHash<uint, uint> contents;
+    QHash<uint, QString> pictures;
     QList<uint> duplicates;
     int listed = 0;
     const QDBusArgument arg = reply.arguments().at(0).value<QDBusArgument>();
@@ -690,6 +803,9 @@ void NotificationService::restoreKnown()
         threads.insert(lipstickId, hints.value(ThreadHint).toString());
         keyHashes.insert(lipstickId, hints.value(KeyHint).toString());
         contents.insert(lipstickId, contentHash(summary, body));
+        const QString picture = QFileInfo(hints.value(PictureHint).toString()).completeBaseName();
+        if(isPictureId(picture) && hints.value(PictureHint).toString() == picturePath(picture))
+            pictures.insert(lipstickId, picture);
     }
     arg.endArray();
 
@@ -708,6 +824,14 @@ void NotificationService::restoreKnown()
                  threads.value(it.value()), contents.value(it.value()), keyHashes.value(it.value()));
         setTimestamp(it.value(), timestamps.value(it.value()));
     }
+    // The pictures of the cards lipstick has; the cache's other files go
+    mPictureOf.clear();
+    for(auto it = found.constBegin(); it != found.constEnd(); ++it) {
+        if(pictures.contains(it.value()))
+            mPictureOf.insert(it.value(), pictures.value(it.value()));
+    }
+    mPicturesKnown = true;
+    schedulePicturePrune();
     static QDBusInterface notifyApp(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE, NOTIFICATIONS_MAIN_IFACE);
     for(uint dup : duplicates) {
         if(!found.values().contains(dup))
@@ -813,9 +937,17 @@ void NotificationService::updatePhoneConnected(int flushDelayMs)
     if(connected == mPhoneConnected)
         return;
     mPhoneConnected = connected;
-    // A phone that is gone is not ringing any more
-    if(!connected)
+    // A phone that is gone is not ringing any more, and sends no pictures: those still
+    // missing are asked for again when it is back (its resync names them)
+    if(!connected) {
         setFindingPhone(false);
+        const QStringList waiting = mPictureRequested.keys();
+        mPictureRequested.clear();
+        for(const QString &id : waiting) {
+            if(!QFile::exists(picturePath(id)) && pictureShown(id))
+                emit pictureChanged(picturePath(id), false);
+        }
+    }
     // What was dismissed meanwhile, once the phone has set itself up
     else if(!mQueuedDismissals.isEmpty())
         QTimer::singleShot(flushDelayMs, this, &NotificationService::flushQueuedDismissals);
@@ -940,6 +1072,8 @@ void NotificationService::forget(uint notificationId)
     if(!key.isEmpty() && mKeys.value(key) == notificationId)
         mKeys.remove(key);
     mPostedAt.remove(notificationId);
+    if(mPictureOf.remove(notificationId))
+        schedulePicturePrune();
 }
 
 QString NotificationService::callTimestamp(uint notificationId) const
@@ -1034,6 +1168,13 @@ void NotificationService::post(const PhoneNotification &n)
         hints.insert(KeyHint, n.key);
     if(!n.category.isEmpty())
         hints.insert(CategoryHint, n.category);
+    // Its picture: the file, there or on its way (the launcher shows a placeholder of
+    // that size until it is)
+    if(!n.pictureId.isEmpty()) {
+        hints.insert(PictureHint, picturePath(n.pictureId));
+        if(n.pictureWidth > 0 && n.pictureHeight > 0)
+            hints.insert(PictureSizeHint, QStringLiteral("%1x%2").arg(n.pictureWidth).arg(n.pictureHeight));
+    }
 
     if(plan.preview) {
         hints.insert("x-nemo-preview-body", n.previewBody());
@@ -1148,6 +1289,7 @@ void NotificationService::post(const PhoneNotification &n)
     if(lipstickId) {
         argumentList[1] = lipstickId;
         remember(lipstickId, n.phoneActions, isCall ? argumentList : QList<QVariant>(), n.thread, content, n.key);
+        setPicture(lipstickId, id, n.pictureId);
         mPostedAt.insert(lipstickId, QDateTime::currentMSecsSinceEpoch());
         // lipstick stamps a notification without a timestamp hint with the
         // current time, also when it replaces one
@@ -1337,4 +1479,213 @@ void NotificationService::NotificationClosed(uint replacesId, uint reason)
     }
     mActioned.remove(replacesId);
     forget(replacesId);
+}
+
+QString NotificationService::pictureDir()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/asteroid-btsyncd/pictures";
+}
+
+bool NotificationService::isPictureId(const QString &id)
+{
+    static const QRegularExpression idRe("^[0-9a-f]{16}$");
+    return idRe.match(id).hasMatch();
+}
+
+QString NotificationService::picturePath(const QString &id)
+{
+    return isPictureId(id) ? pictureDir() + "/" + id + ".jpg" : QString();
+}
+
+bool NotificationService::storePicture(const QString &id, const QString &hash, int size, const QByteArray &base64Jpeg)
+{
+    static const QRegularExpression hashRe("^[0-9a-f]{16}$"), base64Re("^[A-Za-z0-9+/]+={0,2}$");
+    const QByteArray data = base64Jpeg.trimmed();
+    const QString path = picturePath(id);
+    if(path.isEmpty() || !hashRe.match(hash).hasMatch() || size <= 0 || size > MaxPictureBytes
+            || data.isEmpty() || data.size() > (MaxPictureBytes + 2) / 3 * 4
+            || !base64Re.match(QString::fromLatin1(data)).hasMatch()) {
+        qWarning().noquote() << "Notification picture" << id << ": not a picture message";
+        return false;
+    }
+    const QByteArray jpeg = QByteArray::fromBase64(data);
+    if(jpeg.size() != size) {
+        qWarning().noquote() << "Notification picture" << id << ":" << jpeg.size() << "bytes, the phone said" << size;
+        return false;
+    }
+    if(QString::fromLatin1(QCryptographicHash::hash(jpeg, QCryptographicHash::Sha256).toHex().left(16)) != hash) {
+        qWarning().noquote() << "Notification picture" << id << ": its hash does not match";
+        return false;
+    }
+    // A whole JPEG: its start and end markers
+    if(!jpeg.startsWith("\xff\xd8\xff") || !jpeg.endsWith("\xff\xd9")) {
+        qWarning().noquote() << "Notification picture" << id << ": not a whole JPEG";
+        return false;
+    }
+    QDir().mkpath(pictureDir());
+    QSaveFile out(path);
+    if(!out.open(QIODevice::WriteOnly) || out.write(jpeg) != jpeg.size() || !out.commit()) {
+        qWarning().noquote() << "Notification picture" << id << ": cannot be written to" << path;
+        return false;
+    }
+    return true;
+}
+
+bool NotificationService::pictureShown(const QString &id) const
+{
+    for(auto it = mPictureOf.constBegin(); it != mPictureOf.constEnd(); ++it) {
+        if(it.value() == id)
+            return true;
+    }
+    return false;
+}
+
+void NotificationService::setPicture(uint lipstickId, int phoneId, const QString &id)
+{
+    const QString old = mPictureOf.value(lipstickId);
+    if(id.isEmpty())
+        mPictureOf.remove(lipstickId);
+    else
+        mPictureOf.insert(lipstickId, id);
+    if(!old.isEmpty() && old != id)
+        schedulePicturePrune();
+    if(id.isEmpty() || QFile::exists(picturePath(id)))
+        return;
+    requestPicture(phoneId, id);
+}
+
+void NotificationService::requestPicture(int phoneId, const QString &id)
+{
+    if(!phoneConnected()) {
+        qInfo().noquote() << QString("Notification picture %1 of %2: waits for the phone").arg(id).arg(phoneId);
+        return;
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if(mPictureRequested.contains(id) && now - mPictureRequested.value(id) < PictureRetryMs)
+        return;
+    mPictureRequested.insert(id, now);
+    mPicturesUnavailable.remove(id);
+    qInfo().noquote() << QString("Notification picture %1 of %2: asked for").arg(id).arg(phoneId);
+    sendFeedback(phoneId, "picture", id);
+    // No answer (the phone's Gadgetbridge without pictures, a lost write): given up
+    QTimer::singleShot(mPictureTimeoutMs, this, [this, id, now] {
+        if(mPictureRequested.value(id, -1) != now || QFile::exists(picturePath(id)))
+            return;
+        pictureUnavailable(id, "no answer from the phone");
+    });
+}
+
+void NotificationService::pictureUnavailable(const QString &id, const char *why)
+{
+    qInfo().noquote() << QString("Notification picture %1: not shown, %2").arg(id).arg(why);
+    mPicturesUnavailable.insert(id);
+    if(pictureShown(id))
+        emit pictureChanged(picturePath(id), false);
+}
+
+void NotificationService::pictureArrived(int phoneId, const QString &id, const QString &hash, int size,
+                                         const QByteArray &base64Jpeg, bool hasData, qint64 elapsedMs)
+{
+    if(!isPictureId(id)) {
+        qWarning() << "Notification picture for" << phoneId << "without an id, dropped";
+        return;
+    }
+    const qint64 requestedAt = mPictureRequested.value(id, 0);
+    if(!hasData) {
+        mPictureRequested.remove(id);
+        pictureUnavailable(id, "the phone cannot send it");
+        return;
+    }
+    // The card went meanwhile: nothing to show it in
+    if(!pictureShown(id)) {
+        qInfo().noquote() << QString("Notification picture %1 of %2: no card shows it any more, dropped").arg(id).arg(phoneId);
+        return;
+    }
+    if(!storePicture(id, hash, size, base64Jpeg)) {
+        // Broken on its way: asked for once more, then given up
+        mPictureRequested.remove(id);
+        const int failures = mPictureFailures.value(id, 0) + 1;
+        mPictureFailures.insert(id, failures);
+        if(failures < 2)
+            requestPicture(phoneId, id);
+        else
+            pictureUnavailable(id, "it came broken twice");
+        return;
+    }
+    mPictureRequested.remove(id);
+    mPictureFailures.remove(id);
+    mPicturesUnavailable.remove(id);
+    qInfo().noquote() << QString("Notification picture %1 of %2: %3 bytes stored, %4 ms of writes%5")
+            .arg(id).arg(phoneId).arg(size).arg(elapsedMs)
+            .arg(requestedAt ? QString(", %1 ms after it was asked for").arg(QDateTime::currentMSecsSinceEpoch() - requestedAt) : QString());
+    emit pictureChanged(picturePath(id), true);
+    schedulePicturePrune();
+}
+
+int NotificationService::pictureState(const QString &path) const
+{
+    const QString id = QFileInfo(path).completeBaseName();
+    if(!isPictureId(id) || picturePath(id) != path)
+        return PictureUnavailable;
+    if(QFile::exists(path))
+        return PictureReady;
+    if(!pictureShown(id) || mPicturesUnavailable.contains(id) || !phoneConnected())
+        return PictureUnavailable;
+    return PicturePending;
+}
+
+void NotificationService::schedulePicturePrune()
+{
+    if(mPicturePrune)
+        mPicturePrune->start(mPicturePruneDelayMs);
+}
+
+void NotificationService::prunePictures()
+{
+    QSet<QString> shown;
+    for(const QString &id : std::as_const(mPictureOf))
+        shown.insert(id);
+    // What no card shows is forgotten
+    for(auto it = mPictureRequested.begin(); it != mPictureRequested.end(); ) {
+        if(!shown.contains(it.key())) it = mPictureRequested.erase(it); else ++it;
+    }
+    for(auto it = mPictureFailures.begin(); it != mPictureFailures.end(); ) {
+        if(!shown.contains(it.key())) it = mPictureFailures.erase(it); else ++it;
+    }
+    for(auto it = mPicturesUnavailable.begin(); it != mPicturesUnavailable.end(); ) {
+        if(!shown.contains(*it)) it = mPicturesUnavailable.erase(it); else ++it;
+    }
+    // Newest first: the files no card shows go (once lipstick's list is known), then the
+    // oldest beyond the limits
+    const QFileInfoList files = QDir(pictureDir()).entryInfoList(QDir::Files, QDir::Time);
+    QFileInfoList kept;
+    int removed = 0;
+    for(const QFileInfo &f : files) {
+        const QString id = f.completeBaseName();
+        const bool picture = f.suffix() == QLatin1String("jpg") && isPictureId(id);
+        if(mPicturesKnown && (!picture || !shown.contains(id))) {
+            QFile::remove(f.absoluteFilePath());
+            removed++;
+        } else if(picture) {
+            kept << f;
+        }
+    }
+    qint64 bytes = 0;
+    int left = 0;
+    for(int i = 0; i < kept.size(); i++) {
+        bytes += kept.at(i).size();
+        if(i < mMaxPictures && bytes <= mMaxPictureCacheBytes) {
+            left++;
+            continue;
+        }
+        const QString id = kept.at(i).completeBaseName();
+        QFile::remove(kept.at(i).absoluteFilePath());
+        removed++;
+        if(shown.contains(id)) {
+            mPicturesUnavailable.insert(id);
+            emit pictureChanged(picturePath(id), false);
+        }
+    }
+    if(removed)
+        qInfo() << "Notification pictures:" << removed << "deleted," << left << "kept";
 }

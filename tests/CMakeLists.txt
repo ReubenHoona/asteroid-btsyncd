@@ -41,6 +41,13 @@ add_executable(notifications_test notifications_test.cpp ../src/notificationserv
 target_include_directories(notifications_test PRIVATE ../src)
 target_link_libraries(notifications_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
+# Notification pictures (reassembly, checks, reconnections, cleanup) on a private bus
+# like notifications_test
+add_executable(pictures_test pictures_test.cpp ../src/notificationservice.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(pictures_test PRIVATE ../src)
+target_link_libraries(pictures_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
 # The phone status service (battery, Do Not Disturb, disconnected notice)
 # with the notification service, on a private bus like notifications_test
 add_executable(phonestatus_test phonestatus_test.cpp ../src/phonestatusservice.cpp ../src/notificationservice.cpp
