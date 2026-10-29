@@ -27,6 +27,7 @@ set(
 	phonestatusservice.cpp
 	assistantprotocol.cpp
 	assistantservice.cpp
+	callaudio.cpp
 )
 set(
 	HEADERS
@@ -59,6 +60,7 @@ set(
 	phonestatusservice.h
 	assistantprotocol.h
 	assistantservice.h
+	callaudio.h
 )
 
 add_executable(asteroid-btsyncd ${SRC} ${HEADERS})

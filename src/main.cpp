@@ -25,6 +25,7 @@
 #include "application.h"
 #include "advertisement.h"
 #include "bluezmanager.h"
+#include "callaudio.h"
 
 int main(int argc, char **argv)
 {
@@ -55,6 +56,10 @@ int main(int argc, char **argv)
     // NotificationService::setLinkConnected)
     QObject::connect(&bm, &BlueZManager::connectedChanged, &app, [&app, &bm] { app.setPhoneLink(bm.connected()); });
     app.setPhoneLink(bm.connected());
+    // Calls of the phone on the watch: its hands-free unit (oFono)
+    CallAudio calls;
+    QObject::connect(&bm, &BlueZManager::connectedChanged, &calls, [&calls, &bm] { calls.setPhoneLink(bm.connected()); });
+    calls.setPhoneLink(bm.connected());
 
     qcoreapp.exec();
     return 0;
