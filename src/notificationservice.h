@@ -46,6 +46,9 @@ struct PhoneNotification
     // null: no <vb> (an old phone), the strong pattern
     QString vibrate;
     QStringList phoneActions, appActions, smartReplies;
+    // How many suggested replies came as HTML character references (&#x1F603;: some
+    // notification assistants give their emoji so; decoded here)
+    int smartReplyEntities = 0;
     bool resync = false;
     // Version 4
     QString thread;
@@ -56,6 +59,14 @@ struct PhoneNotification
     // Which of the messages are the user's own (<me>1</me> in an <m>, phones that know
     // the watch's <me> capability): the same length as messages
     QList<bool> ownMessages;
+    // The picture of each message (<pc> in an <m>, phones that know the watch's <msgpictures>
+    // capability), the same length as messages: id "" for a message without
+    struct MessagePicture { QString id; int width = 0, height = 0; };
+    QList<MessagePicture> messagePictures;
+    // Every picture the card shows: its own (<pc>) and its messages', newest first
+    QStringList pictureIds() const;
+    // The newest message's picture id, "" if the messages have none
+    QString newestMessagePicture() const;
     int importance = 0;                         // Android's 1 (min) .. 5 (max), 0 unknown
     bool onlyAlertOnce = false;
     bool ongoing = false;
@@ -76,6 +87,10 @@ struct PhoneNotification
     // The conversation for the launcher's full view (the x-asteroid-messages hint): a JSON
     // array of {"s": sender, "t": text, "me": true for the user's own}, "" without messages
     QString messagesJson() const;
+    // HTML character references (&#x1F603; &#128515;) in a text, as the characters they are
+    static QString decodeCharacterReferences(const QString &text, int *found = nullptr);
+    // Whether a text has an emoji (pictographs, dingbats, symbols)
+    static bool hasEmoji(const QString &text);
 };
 
 /*
@@ -312,7 +327,8 @@ public:
     // cannot send it; elapsedMs from its first write
     void pictureArrived(int phoneId, const QString &id, const QString &hash, int size,
                         const QByteArray &base64Jpeg, bool hasData, qint64 elapsedMs);
-    int pictureState(const QString &path) const;
+    // (a picture of a card's older message, not asked for yet, is asked for now: on demand)
+    int pictureState(const QString &path);
     void setPicturePruneDelayMs(int ms) { mPicturePruneDelayMs = ms; }
     void setPictureTimeoutMs(int ms) { mPictureTimeoutMs = ms; }
     void setPictureCacheLimits(int pictures, int bytes) { mMaxPictures = pictures; mMaxPictureCacheBytes = bytes; }
@@ -380,7 +396,10 @@ private:
     void updatePhoneConnected(int flushDelayMs);
     static uint contentHash(const QString &summary, const QString &body);
     // The picture a card shows (lipstick id), asked for from the phone when it is not here
-    void setPicture(uint lipstickId, int phoneId, const QString &id);
+    // The pictures a card shows (lipstick id), asked for from the phone when they are not
+    // here: the card's own and its newest message's at once, the others when shown
+    // (PictureState, on demand)
+    void setPictures(uint lipstickId, int phoneId, const QStringList &ids, const QStringList &askNow);
     void requestPicture(int phoneId, const QString &id);
     bool pictureShown(const QString &id) const;
     void pictureUnavailable(const QString &id, const char *why);
@@ -434,7 +453,7 @@ private:
 
     // Notification pictures: the picture of each card (lipstick id -> picture id); when
     // each was asked for, how often one came broken, the ones the phone cannot send
-    QHash<uint, QString> mPictureOf;
+    QHash<uint, QStringList> mPictureOf;
     QHash<QString, qint64> mPictureRequested;
     QHash<QString, int> mPictureFailures;
     QSet<QString> mPicturesUnavailable;

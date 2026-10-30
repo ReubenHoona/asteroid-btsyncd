@@ -12,6 +12,8 @@
  *     posted; the find-my-watch alert still rings; a call: its card, no vibration;
  *     unplugged: alerting again; dconf quiet-on-charger false: alerting on the charger;
  *     QuietOnCharger on the session bus API
+ *   - suggested replies with emoji as HTML character references (&#x1F603;): decoded; real
+ *     emoji, "&amp;" text, a surrogate or control character reference left as they are
  *   - SetAppNotifications: mute / unmute feedback for the card's phone id, the card stays;
  *     refused (nothing sent) without a phone, for a card that does not offer mute (a call,
  *     the find-my-watch alert), for an unknown card
@@ -307,6 +309,28 @@ int main(int argc, char **argv)
         CHECK(list.at(1).toObject().value("me").toBool());
         CHECK(list.at(5).toObject().value("t").toString() == "m7");
         CHECK(list.at(5).toObject().value("me").toBool());
+    }
+
+    // Suggested replies whose emoji came as HTML character references (the field report:
+    // "&#x1F603;" on the Reply page): the emoji; real emoji and other text as they are
+    {
+        const QString grin = QString::fromUtf8("\xf0\x9f\x98\x83"), sad = QString::fromUtf8("\xf0\x9f\x98\x9e");
+        int found = -1;
+        CHECK(PhoneNotification::decodeCharacterReferences(QStringLiteral("a&#x1F603;b&#65;&#128542;"), &found)
+              == "a" + grin + "bA" + sad);
+        CHECK(found == 3);
+        CHECK(PhoneNotification::decodeCharacterReferences(QStringLiteral("&#xD800; &#1; &#x110000; &amp; &#x1F6;x"), &found)
+              == QStringLiteral("&#xD800; &#1; &#x110000; &amp; ") + QChar(0x1F6) + "x");
+        CHECK(found == 1);
+        CHECK(PhoneNotification::hasEmoji("ok " + QString::fromUtf8("\xf0\x9f\x91\x8d")));
+        CHECK(PhoneNotification::hasEmoji(QString::fromUtf8("\xe2\x9d\xa4\xef\xb8\x8f")));
+        CHECK(!PhoneNotification::hasEmoji(QStringLiteral("Yes")));
+        const Posted p = post(driver, fake,
+            "<insert><id>510</id><vb>normal</vb><an>Example Chat</an><su>Alex Example</su><bo>Lunch?</bo>"
+            "<ac>reply,open,mute</ac><sr><r>&amp;#x1F603;</r><r>&amp;#128542; no</r><r>\xf0\x9f\x98\x83 sure</r>"
+            "<r>AT&amp;T &amp;amp; co</r><r>&amp;#xD800;</r></sr></insert>");
+        CHECK(p.hints.value("x-asteroid-smart-replies").toString()
+              == grin + "\n" + sad + " no\n" + grin + " sure\nAT&T &amp; co\n&#xD800;");
     }
 
     // Quiet on the charger. Off at the start (mce's answer): alerting

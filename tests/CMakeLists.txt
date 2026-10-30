@@ -86,3 +86,9 @@ add_executable(messaging_test messaging_test.cpp ../src/notificationservice.cpp 
 	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(messaging_test PRIVATE ../src)
 target_link_libraries(messaging_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+# The pictures of a conversation's messages (<pc> in an <m>), on a private bus like pictures_test
+add_executable(msgpictures_test msgpictures_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(msgpictures_test PRIVATE ../src)
+target_link_libraries(msgpictures_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)

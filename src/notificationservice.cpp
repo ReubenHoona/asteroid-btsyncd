@@ -117,18 +117,39 @@ QByteArray NotificationService::capabilities()
         // The user's own messages of a conversation marked (<me>1</me> in an <m>): the
         // full view shows them as Wear OS does, on the other side
         "<me>1</me>"
+        // Each message's own picture (<pc> in an <m>), kept while a message shows it
+        "<msgpictures>1</msgpictures>"
         "</capabilities>";
 }
 
 // The newest messages of a conversation kept, and their longest text
 static const int MaxMessageChars = 300;
 
-// <ms><m><s>SENDER</s><t>TEXT</t><me>1</me></m>...</ms>: the newest MaxMessages,
-// and which are the user's own (<me>1</me>)
+// <pc><i>ID</i><w>W</w><h>H</h></pc>: a picture, and the size it comes at
+static void readPictureRef(QXmlStreamReader &reader, QString &id, int &width, int &height)
+{
+    while(reader.readNextStartElement()) {
+        if(reader.name() == QLatin1String("i"))
+            id = reader.readElementText().trimmed();
+        else if(reader.name() == QLatin1String("w"))
+            width = qBound(0, reader.readElementText().trimmed().toInt(), 4096);
+        else if(reader.name() == QLatin1String("h"))
+            height = qBound(0, reader.readElementText().trimmed().toInt(), 4096);
+        else
+            reader.skipCurrentElement();
+    }
+    if(!NotificationService::isPictureId(id))
+        id.clear();
+}
+
+// <ms><m><s>SENDER</s><t>TEXT</t><me>1</me><pc>..</pc></m>...</ms>: the newest
+// MaxMessages, which are the user's own (<me>1</me>) and their pictures (a message
+// with a picture may have no text)
 static void readMessages(QXmlStreamReader &reader, PhoneNotification &n)
 {
     QList<QPair<QString, QString>> messages;
     QList<bool> own;
+    QList<PhoneNotification::MessagePicture> pictures;
     while(reader.readNextStartElement()) {
         if(reader.name() != QLatin1String("m")) {
             reader.skipCurrentElement();
@@ -136,6 +157,7 @@ static void readMessages(QXmlStreamReader &reader, PhoneNotification &n)
         }
         QString sender, text;
         bool me = false;
+        PhoneNotification::MessagePicture picture;
         while(reader.readNextStartElement()) {
             if(reader.name() == QLatin1String("s"))
                 sender = reader.readElementText().simplified();
@@ -143,22 +165,27 @@ static void readMessages(QXmlStreamReader &reader, PhoneNotification &n)
                 text = reader.readElementText().trimmed();
             else if(reader.name() == QLatin1String("me"))
                 me = reader.readElementText().trimmed() == QLatin1String("1");
+            else if(reader.name() == QLatin1String("pc"))
+                readPictureRef(reader, picture.id, picture.width, picture.height);
             else
                 reader.skipCurrentElement();
         }
         if(text.length() > MaxMessageChars)
             text = text.left(MaxMessageChars - 1) + QChar(0x2026);
-        if(!text.isEmpty()) {
+        if(!text.isEmpty() || !picture.id.isEmpty()) {
             messages << qMakePair(sender, text);
             own << me;
+            pictures << picture;
         }
     }
     while(messages.size() > MaxMessages) {
         messages.removeFirst();
         own.removeFirst();
+        pictures.removeFirst();
     }
     n.messages = messages;
     n.ownMessages = own;
+    n.messagePictures = pictures;
 }
 
 PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
@@ -179,8 +206,17 @@ PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
             n.resync = reader.readElementText().trimmed() == "1";
         else if(name == QLatin1String("ax"))
             n.appActions = readTextList(reader, "a", MaxAppActions, 40);
-        else if(name == QLatin1String("sr"))
+        else if(name == QLatin1String("sr")) {
+            // Suggested replies: some notification assistants give their emoji as HTML
+            // character references (&#x1F603;), which would show as that text
             n.smartReplies = readTextList(reader, "r", MaxSmartReplies, 120);
+            for(QString &r : n.smartReplies) {
+                int found = 0;
+                r = PhoneNotification::decodeCharacterReferences(r, &found);
+                if(found)
+                    n.smartReplyEntities++;
+            }
+        }
         else if(name == QLatin1String("th"))
             n.thread = reader.readElementText().trimmed().left(64);
         else if(name == QLatin1String("ky"))
@@ -197,21 +233,9 @@ PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
             n.category = reader.readElementText().trimmed().left(32);
         else if(name == QLatin1String("ic"))
             n.iconHash = reader.readElementText().trimmed();
-        else if(name == QLatin1String("pc")) {
+        else if(name == QLatin1String("pc"))
             // <pc><i>ID</i><w>W</w><h>H</h></pc>: the picture, and its size
-            while(reader.readNextStartElement()) {
-                if(reader.name() == QLatin1String("i"))
-                    n.pictureId = reader.readElementText().trimmed();
-                else if(reader.name() == QLatin1String("w"))
-                    n.pictureWidth = qBound(0, reader.readElementText().trimmed().toInt(), 4096);
-                else if(reader.name() == QLatin1String("h"))
-                    n.pictureHeight = qBound(0, reader.readElementText().trimmed().toInt(), 4096);
-                else
-                    reader.skipCurrentElement();
-            }
-            if(!NotificationService::isPictureId(n.pictureId))
-                n.pictureId.clear();
-        }
+            readPictureRef(reader, n.pictureId, n.pictureWidth, n.pictureHeight);
         else reader.skipCurrentElement();
     }
     for(QString &a : n.phoneActions)
@@ -256,9 +280,76 @@ QString PhoneNotification::messagesJson() const
         m.insert(QStringLiteral("t"), messages.at(i).second);
         if(ownMessages.value(i, false))
             m.insert(QStringLiteral("me"), true);
+        const MessagePicture picture = messagePictures.value(i);
+        if(!picture.id.isEmpty()) {
+            m.insert(QStringLiteral("p"), NotificationService::picturePath(picture.id));
+            if(picture.width > 0 && picture.height > 0) {
+                m.insert(QStringLiteral("w"), picture.width);
+                m.insert(QStringLiteral("h"), picture.height);
+            }
+        }
         list.append(m);
     }
     return QString::fromUtf8(QJsonDocument(list).toJson(QJsonDocument::Compact));
+}
+
+QStringList PhoneNotification::pictureIds() const
+{
+    QStringList ids;
+    if(!pictureId.isEmpty())
+        ids << pictureId;
+    for(int i = messagePictures.size() - 1; i >= 0; i--) {
+        const QString &id = messagePictures.at(i).id;
+        if(!id.isEmpty() && !ids.contains(id))
+            ids << id;
+    }
+    return ids;
+}
+
+QString PhoneNotification::newestMessagePicture() const
+{
+    for(int i = messagePictures.size() - 1; i >= 0; i--) {
+        if(!messagePictures.at(i).id.isEmpty())
+            return messagePictures.at(i).id;
+    }
+    return QString();
+}
+
+QString PhoneNotification::decodeCharacterReferences(const QString &text, int *found)
+{
+    static const QRegularExpression ref(QStringLiteral("&#(?:[xX]([0-9A-Fa-f]{1,6})|([0-9]{1,7}));"));
+    if(found)
+        *found = 0;
+    if(!text.contains(QLatin1String("&#")))
+        return text;
+    QString out;
+    int last = 0;
+    auto it = ref.globalMatch(text);
+    while(it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        bool ok = false;
+        const uint cp = m.capturedView(1).isEmpty() ? m.captured(2).toUInt(&ok, 10) : m.captured(1).toUInt(&ok, 16);
+        // a character (not a surrogate, not a control character but tab and newline)
+        if(!ok || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF) || (cp < 0x20 && cp != 9 && cp != 10))
+            continue;
+        out += text.mid(last, m.capturedStart() - last);
+        const char32_t c = cp;
+        out += QString::fromUcs4(&c, 1);
+        last = m.capturedEnd();
+        if(found)
+            (*found)++;
+    }
+    out += text.mid(last);
+    return out;
+}
+
+bool PhoneNotification::hasEmoji(const QString &text)
+{
+    for(const uint cp : text.toUcs4()) {
+        if(cp >= 0x1F000 || (cp >= 0x2600 && cp <= 0x27BF) || (cp >= 0x2B00 && cp <= 0x2BFF) || cp == 0x2764)
+            return true;
+    }
+    return false;
 }
 
 /*
@@ -342,6 +433,19 @@ static QString describe(const PhoneNotification &n, int bytes)
     if(!n.category.isEmpty()) flags << "category " + n.category;
     if(!n.iconHash.isEmpty()) flags << "icon";
     if(!n.pictureId.isEmpty()) flags << "picture";
+    if(!n.newestMessagePicture().isEmpty()) {
+        int pictures = 0;
+        for(const auto &p : n.messagePictures)
+            pictures += p.id.isEmpty() ? 0 : 1;
+        flags << QString("%1 message picture(s)").arg(pictures);
+    }
+    if(!n.smartReplies.isEmpty()) {
+        int emoji = 0;
+        for(const QString &r : n.smartReplies)
+            emoji += PhoneNotification::hasEmoji(r) ? 1 : 0;
+        flags << QString("smart replies %1 (%2 with emoji, %3 with entity text)")
+                 .arg(n.smartReplies.size()).arg(emoji).arg(n.smartReplyEntities);
+    }
     if(!n.phoneActions.isEmpty()) flags << "actions " + n.phoneActions.join(',');
     if(!n.key.isEmpty()) flags << "key";
     return QString("Phone notification %1: insert (%2 bytes) from %3, title %4 chars, body %5 chars, vibration %6%7")
@@ -830,7 +934,7 @@ void NotificationService::restoreKnown()
     QHash<uint, QString> threads;
     QHash<uint, QString> keyHashes;
     QHash<uint, uint> contents;
-    QHash<uint, QString> pictures;
+    QHash<uint, QStringList> pictures;
     QList<uint> duplicates;
     int listed = 0;
     const QDBusArgument arg = reply.arguments().at(0).value<QDBusArgument>();
@@ -866,9 +970,19 @@ void NotificationService::restoreKnown()
         threads.insert(lipstickId, hints.value(ThreadHint).toString());
         keyHashes.insert(lipstickId, hints.value(KeyHint).toString());
         contents.insert(lipstickId, contentHash(summary, body));
-        const QString picture = QFileInfo(hints.value(PictureHint).toString()).completeBaseName();
-        if(isPictureId(picture) && hints.value(PictureHint).toString() == picturePath(picture))
-            pictures.insert(lipstickId, picture);
+        // its pictures: its own and its messages'
+        QStringList cardPictures;
+        QStringList paths(hints.value(PictureHint).toString());
+        const QJsonArray messageList = QJsonDocument::fromJson(hints.value(MessagesHint).toString().toUtf8()).array();
+        for(const QJsonValue &m : messageList)
+            paths << m.toObject().value(QStringLiteral("p")).toString();
+        for(const QString &p : std::as_const(paths)) {
+            const QString picture = QFileInfo(p).completeBaseName();
+            if(isPictureId(picture) && p == picturePath(picture) && !cardPictures.contains(picture))
+                cardPictures << picture;
+        }
+        if(!cardPictures.isEmpty())
+            pictures.insert(lipstickId, cardPictures);
     }
     arg.endArray();
 
@@ -1385,7 +1499,13 @@ void NotificationService::post(const PhoneNotification &n)
     if(lipstickId) {
         argumentList[1] = lipstickId;
         remember(lipstickId, n.phoneActions, isCall ? argumentList : QList<QVariant>(), n.thread, content, n.key);
-        setPicture(lipstickId, id, n.pictureId);
+        QStringList askNow;
+        if(!n.pictureId.isEmpty())
+            askNow << n.pictureId;
+        const QString newest = n.newestMessagePicture();
+        if(!newest.isEmpty() && !askNow.contains(newest))
+            askNow << newest;
+        setPictures(lipstickId, id, n.pictureIds(), askNow);
         mPostedAt.insert(lipstickId, QDateTime::currentMSecsSinceEpoch());
         // lipstick stamps a notification without a timestamp hint with the
         // current time, also when it replaces one
@@ -1630,24 +1750,31 @@ bool NotificationService::storePicture(const QString &id, const QString &hash, i
 bool NotificationService::pictureShown(const QString &id) const
 {
     for(auto it = mPictureOf.constBegin(); it != mPictureOf.constEnd(); ++it) {
-        if(it.value() == id)
+        if(it.value().contains(id))
             return true;
     }
     return false;
 }
 
-void NotificationService::setPicture(uint lipstickId, int phoneId, const QString &id)
+void NotificationService::setPictures(uint lipstickId, int phoneId, const QStringList &ids, const QStringList &askNow)
 {
-    const QString old = mPictureOf.value(lipstickId);
-    if(id.isEmpty())
+    const QStringList old = mPictureOf.value(lipstickId);
+    if(ids.isEmpty())
         mPictureOf.remove(lipstickId);
     else
-        mPictureOf.insert(lipstickId, id);
-    if(!old.isEmpty() && old != id)
-        schedulePicturePrune();
-    if(id.isEmpty() || QFile::exists(picturePath(id)))
-        return;
-    requestPicture(phoneId, id);
+        mPictureOf.insert(lipstickId, ids);
+    for(const QString &id : old) {
+        if(!ids.contains(id)) {
+            schedulePicturePrune();
+            break;
+        }
+    }
+    // the card's own picture and the newest message's now; an older message's when the
+    // launcher shows it (pictureState)
+    for(const QString &id : askNow) {
+        if(!QFile::exists(picturePath(id)))
+            requestPicture(phoneId, id);
+    }
 }
 
 void NotificationService::requestPicture(int phoneId, const QString &id)
@@ -1718,7 +1845,7 @@ void NotificationService::pictureArrived(int phoneId, const QString &id, const Q
     schedulePicturePrune();
 }
 
-int NotificationService::pictureState(const QString &path) const
+int NotificationService::pictureState(const QString &path)
 {
     const QString id = QFileInfo(path).completeBaseName();
     if(!isPictureId(id) || picturePath(id) != path)
@@ -1727,6 +1854,18 @@ int NotificationService::pictureState(const QString &path) const
         return PictureReady;
     if(!pictureShown(id) || mPicturesUnavailable.contains(id) || !phoneConnected())
         return PictureUnavailable;
+    // a picture no one asked for yet (an older message's, a cache that lost it): asked for
+    // now, from the phone notification of a card that shows it
+    if(!mPictureRequested.contains(id)) {
+        for(auto it = mPictureOf.constBegin(); it != mPictureOf.constEnd(); ++it) {
+            const int phoneId = it.value().contains(id) ? mKnownAndroidNotifs.key(it.key(), 0) : 0;
+            if(phoneId) {
+                qInfo().noquote() << QString("Notification picture %1 of %2: shown, so asked for").arg(id).arg(phoneId);
+                requestPicture(phoneId, id);
+                break;
+            }
+        }
+    }
     return PicturePending;
 }
 
@@ -1739,8 +1878,10 @@ void NotificationService::schedulePicturePrune()
 void NotificationService::prunePictures()
 {
     QSet<QString> shown;
-    for(const QString &id : std::as_const(mPictureOf))
-        shown.insert(id);
+    for(const QStringList &ids : std::as_const(mPictureOf)) {
+        for(const QString &id : ids)
+            shown.insert(id);
+    }
     // What no card shows is forgotten
     for(auto it = mPictureRequested.begin(); it != mPictureRequested.end(); ) {
         if(!shown.contains(it.key())) it = mPictureRequested.erase(it); else ++it;
