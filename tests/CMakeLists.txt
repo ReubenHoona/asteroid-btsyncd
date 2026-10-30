@@ -55,6 +55,13 @@ add_executable(phonestatus_test phonestatus_test.cpp ../src/phonestatusservice.c
 target_include_directories(phonestatus_test PRIVATE ../src)
 target_link_libraries(phonestatus_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
+# The battery service (the level and whether it charges, from a fake mce) on a
+# private bus like notifications_test
+add_executable(battery_test battery_test.cpp ../src/batteryservice.cpp ../src/batterystatus.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
+target_include_directories(battery_test PRIVATE ../src)
+target_link_libraries(battery_test PRIVATE Qt6::Core Qt6::DBus)
+
 # The weather service (the forecast's location from the phone) on a private bus
 # with a dconf-service, like notifications_test
 add_executable(weather_test weather_test.cpp ../src/weatherservice.cpp

@@ -19,6 +19,7 @@
 #define BATTERYSTATUS_H
 
 #include <QObject>
+#include <QString>
 
 class BatteryStatus : public QObject
 {
@@ -28,14 +29,32 @@ public:
 
     int chargePercentage() const { return m_chargePercentage; }
 
+    // mce's words (as its battery-udev module derives them from the kernel's
+    // power supplies, the launcher's battery notifier uses the same), empty
+    // until mce said: charger "on", "off" or "unknown"; battery state
+    // "charging", "discharging", "not_charging", "full" or "unknown"; battery
+    // status "ok", "low", "empty", "full" or "unknown"
+    QString chargerState() const { return m_chargerState; }
+    QString batteryState() const { return m_batteryState; }
+    QString batteryStatus() const { return m_batteryStatus; }
+
 signals:
     void chargePercentageChanged(int percentage);
+    // the charger, the battery state or the battery status changed
+    void stateChanged();
 
 private slots:
     void onBatteryLevelInd(int percentage);
+    void onChargerStateInd(const QString &state);
+    void onBatteryStateInd(const QString &state);
+    void onBatteryStatusInd(const QString &status);
 
 private:
+    void query(const char *method, const char *slot);
+    void setState(QString &member, const QString &value);
+
     int m_chargePercentage = -1;
+    QString m_chargerState, m_batteryState, m_batteryStatus;
 };
 
 #endif // BATTERYSTATUS_H
