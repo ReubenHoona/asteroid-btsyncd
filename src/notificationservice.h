@@ -28,6 +28,7 @@
 
 #include "service.h"
 
+class BatteryStatus;
 class NotificationService;
 class QDBusServiceWatcher;
 class QTimer;
@@ -52,6 +53,9 @@ struct PhoneNotification
     // same card whatever phone id it comes with
     QString key;
     QList<QPair<QString, QString>> messages;   // sender, text; oldest first
+    // Which of the messages are the user's own (<me>1</me> in an <m>, phones that know
+    // the watch's <me> capability): the same length as messages
+    QList<bool> ownMessages;
     int importance = 0;                         // Android's 1 (min) .. 5 (max), 0 unknown
     bool onlyAlertOnce = false;
     bool ongoing = false;
@@ -69,6 +73,9 @@ struct PhoneNotification
     QString shownBody() const;
     // What the banner shows: the newest message
     QString previewBody() const;
+    // The conversation for the launcher's full view (the x-asteroid-messages hint): a JSON
+    // array of {"s": sender, "t": text, "me": true for the user's own}, "" without messages
+    QString messagesJson() const;
 };
 
 /*
@@ -80,6 +87,10 @@ struct PhoneNotification
  *            message in a conversation): the old card goes, a new one comes
  *            at the top, with banner and vibration
  * preview: with a banner; vibrate: with the phone's vibration pattern.
+ * onCharger: the watch is on its charger and quiet there (as Wear OS's
+ * SysUI, OffBodyAlertingMuter: alerting is muted while power is connected):
+ * no banner, no vibration, but for the find-my-watch alert. quiet says why a
+ * notification that would have alerted does not (for the log), else nullptr.
  */
 struct PostPlan
 {
@@ -87,8 +98,10 @@ struct PostPlan
     Kind kind = New;
     bool preview = false;
     bool vibrate = false;
+    const char *quiet = nullptr;
 
-    static PostPlan decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb);
+    static PostPlan decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb,
+                           bool onCharger = false);
     // The ngfd event (lipstick's x-nemo-feedback) of a notification that
     // vibrates, from the phone's <vb>
     static QString feedbackEvent(const PhoneNotification &n);
@@ -107,6 +120,9 @@ struct PostPlan
  * and with notification pictures (<pictures> in the capabilities):
  *   ty=picture, tx=ID the watch has not got the picture the notification's <pc>
  *                     names: the phone writes it to the picture characteristic
+ * and ty=unmute: the user turned the notifications of this notification's app
+ * on again on the watch (ty=mute turned them off; phones that do not know
+ * unmute ignore it)
  * A dismiss while no phone is subscribed waits (version 4) and goes out
  * when a phone subscribes again.
  */
@@ -178,6 +194,16 @@ public slots:
      * phone is away, no card shows it). PictureChanged says when that changes.
      */
     int PictureState(const QString &path);
+    /*
+     * The watch's notifications of this notification's app (by lipstick id) on or off, as
+     * Wear OS's long press menu ("Notifications": the app, "Get notifications from APP
+     * on your watch"): the phone stops (mute) or starts again (unmute) sending them.
+     * The card stays. False, and nothing sent, when the card is not the phone's or the
+     * phone does not offer it (no "mute" among its actions), or no phone is connected.
+     */
+    bool SetAppNotifications(uint notificationId, bool enabled);
+    // The watch is on its charger and phone notifications come quietly (see PostPlan)
+    bool QuietOnCharger();
 
 signals:
     void FindPhoneChanged(bool ringing);
@@ -205,6 +231,8 @@ public:
     static constexpr const char *ThreadHint = "x-asteroid-thread";
     static constexpr const char *KeyHint = "x-asteroid-phone-key";
     static constexpr const char *CategoryHint = "x-asteroid-category";
+    // The conversation's messages for the full view (PhoneNotification::messagesJson)
+    static constexpr const char *MessagesHint = "x-asteroid-messages";
     // A card the phone removed closes this much later (see removed())
     static const int CloseDelayMs = 1500;
     // The phone's first update of a card within this long after a reply
@@ -291,6 +319,18 @@ public:
 
     bool reply(uint notificationId, const QString &text);
     bool silence(uint notificationId);
+    bool setAppNotifications(uint notificationId, bool enabled);
+
+    /*
+     * Quiet on the charger, as Wear OS: while mce says the charger is on, phone
+     * notifications come without banner or vibration (the find-my-watch alert still
+     * rings); dconf /org/asteroidos/notifications/quiet-on-charger false turns it off.
+     * The charger's state comes from mce (BatteryStatus), or setOnCharger (the tests).
+     */
+    static constexpr const char *QuietOnChargerKey = "/org/asteroidos/notifications/quiet-on-charger";
+    bool onCharger() const;
+    bool quietOnCharger() const;
+    void setOnCharger(bool on) { mChargerOverride = on ? 1 : 0; }
 
     // Find my phone (see NotificationsDBusApi::FindPhone)
     bool findPhone(bool start);
@@ -350,6 +390,10 @@ private:
     void prunePictures();
 
     NotificationsFeedbackChrc *mFeedback;
+    // mce's charger state (quiet on the charger); -1: mce's, else setOnCharger's
+    BatteryStatus *mBattery = nullptr;
+    int mChargerOverride = -1;
+    QString mChargerLogged;
     // Lipstick ids whose close follows an action already reported to the
     // phone: lipstick removes a notification after any action, and that close
     // must not reach the phone as a dismiss.

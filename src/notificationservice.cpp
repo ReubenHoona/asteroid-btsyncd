@@ -16,6 +16,7 @@
  */
 
 #include "notificationservice.h"
+#include "batterystatus.h"
 #include "characteristic.h"
 #include "common.h"
 #include "messagejoiner.h"
@@ -28,6 +29,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -110,38 +114,51 @@ QByteArray NotificationService::capabilities()
         // insert, feedback ty=picture, the picture characteristic)
         "<pictures>" + QByteArray::number(PictureSide) + "</pictures>"
         "<picturebytes>" + QByteArray::number(MaxPictureBytes) + "</picturebytes>"
+        // The user's own messages of a conversation marked (<me>1</me> in an <m>): the
+        // full view shows them as Wear OS does, on the other side
+        "<me>1</me>"
         "</capabilities>";
 }
 
 // The newest messages of a conversation kept, and their longest text
 static const int MaxMessageChars = 300;
 
-// <ms><m><s>SENDER</s><t>TEXT</t></m>...</ms>: the newest MaxMessages
-static QList<QPair<QString, QString>> readMessages(QXmlStreamReader &reader)
+// <ms><m><s>SENDER</s><t>TEXT</t><me>1</me></m>...</ms>: the newest MaxMessages,
+// and which are the user's own (<me>1</me>)
+static void readMessages(QXmlStreamReader &reader, PhoneNotification &n)
 {
     QList<QPair<QString, QString>> messages;
+    QList<bool> own;
     while(reader.readNextStartElement()) {
         if(reader.name() != QLatin1String("m")) {
             reader.skipCurrentElement();
             continue;
         }
         QString sender, text;
+        bool me = false;
         while(reader.readNextStartElement()) {
             if(reader.name() == QLatin1String("s"))
                 sender = reader.readElementText().simplified();
             else if(reader.name() == QLatin1String("t"))
                 text = reader.readElementText().trimmed();
+            else if(reader.name() == QLatin1String("me"))
+                me = reader.readElementText().trimmed() == QLatin1String("1");
             else
                 reader.skipCurrentElement();
         }
         if(text.length() > MaxMessageChars)
             text = text.left(MaxMessageChars - 1) + QChar(0x2026);
-        if(!text.isEmpty())
+        if(!text.isEmpty()) {
             messages << qMakePair(sender, text);
+            own << me;
+        }
     }
-    while(messages.size() > MaxMessages)
+    while(messages.size() > MaxMessages) {
         messages.removeFirst();
-    return messages;
+        own.removeFirst();
+    }
+    n.messages = messages;
+    n.ownMessages = own;
 }
 
 PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
@@ -169,7 +186,7 @@ PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
         else if(name == QLatin1String("ky"))
             n.key = reader.readElementText().trimmed().left(64);
         else if(name == QLatin1String("ms"))
-            n.messages = readMessages(reader);
+            readMessages(reader, n);
         else if(name == QLatin1String("pr"))
             n.importance = qBound(0, reader.readElementText().trimmed().toInt(), 5);
         else if(name == QLatin1String("oa"))
@@ -228,6 +245,22 @@ QString PhoneNotification::previewBody() const
     return (m.first.isEmpty() || m.first == summary) ? m.second : m.first + QStringLiteral(": ") + m.second;
 }
 
+QString PhoneNotification::messagesJson() const
+{
+    if(messages.isEmpty())
+        return QString();
+    QJsonArray list;
+    for(int i = 0; i < messages.size(); i++) {
+        QJsonObject m;
+        m.insert(QStringLiteral("s"), messages.at(i).first);
+        m.insert(QStringLiteral("t"), messages.at(i).second);
+        if(ownMessages.value(i, false))
+            m.insert(QStringLiteral("me"), true);
+        list.append(m);
+    }
+    return QString::fromUtf8(QJsonDocument(list).toJson(QJsonDocument::Compact));
+}
+
 /*
  * As Wear OS, a call ringing on the phone and an alarm going off on the phone
  * only vibrate on the watch: the phone plays their sound. eos_phone_ringing
@@ -250,7 +283,8 @@ QString PostPlan::feedbackEvent(const PhoneNotification &n)
     return QStringLiteral("notif_strong");
 }
 
-PostPlan PostPlan::decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb)
+PostPlan PostPlan::decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb,
+                          bool onCharger)
 {
     PostPlan plan;
     // A banner unless it was sent again after a reconnection, Android calls
@@ -259,8 +293,15 @@ PostPlan PostPlan::decide(const PhoneNotification &n, bool exists, bool contentC
     const bool alarm = n.vibrate == QLatin1String("alarm");
     const bool findWatch = n.phoneActions.contains("found");
     const bool dndSilenced = doNotDisturb && !alarm && !findWatch;
-    plan.preview = !n.resync && !(n.importance > 0 && n.importance <= 2) && !dndSilenced;
+    // On the charger nothing alerts (Wear OS mutes alerting while power is
+    // connected, whatever the notification), but the find-my-watch alert: the
+    // user asked the watch to ring
+    const bool chargerSilenced = onCharger && !findWatch;
+    const bool wouldAlert = !n.resync && !(n.importance > 0 && n.importance <= 2) && !dndSilenced;
+    plan.preview = wouldAlert && !chargerSilenced;
     plan.vibrate = plan.preview && n.vibrate != QLatin1String("none");
+    if(wouldAlert && chargerSilenced)
+        plan.quiet = "on the charger";
 
     if(!exists) {
         plan.kind = New;
@@ -293,7 +334,8 @@ static QString describe(const PhoneNotification &n, int bytes)
 {
     QStringList flags;
     if(n.resync) flags << "resync";
-    if(!n.thread.isEmpty()) flags << QString("thread, %1 message(s)").arg(n.messages.size());
+    if(!n.thread.isEmpty()) flags << QString("thread, %1 message(s)%2").arg(n.messages.size())
+            .arg(n.ownMessages.contains(true) ? QString(" (%1 own)").arg(n.ownMessages.count(true)) : QString());
     if(n.importance) flags << QString("importance %1").arg(n.importance);
     if(n.onlyAlertOnce) flags << "alert once";
     if(n.ongoing) flags << "ongoing";
@@ -702,6 +744,16 @@ int NotificationsDBusApi::PictureState(const QString &path)
     return mService->pictureState(path);
 }
 
+bool NotificationsDBusApi::SetAppNotifications(uint notificationId, bool enabled)
+{
+    return mService->setAppNotifications(notificationId, enabled);
+}
+
+bool NotificationsDBusApi::QuietOnCharger()
+{
+    return mService->quietOnCharger();
+}
+
 NotificationService::NotificationService(int index, QDBusConnection bus, QObject *parent) : Service(bus, index, NOTIF_UUID, parent)
 {
     mFeedback = new NotificationsFeedbackChrc(bus, 1, this);
@@ -714,6 +766,17 @@ NotificationService::NotificationService(int index, QDBusConnection bus, QObject
     mPicturePrune = new QTimer(this);
     mPicturePrune->setSingleShot(true);
     connect(mPicturePrune, &QTimer::timeout, this, &NotificationService::prunePictures);
+
+    // Quiet on the charger: mce's charger state (it signals only changes)
+    mBattery = new BatteryStatus(this);
+    connect(mBattery, &BatteryStatus::stateChanged, this, [this] {
+        const QString state = mBattery->chargerState();
+        if(state == mChargerLogged)
+            return;
+        mChargerLogged = state;
+        qInfo().noquote() << QString("Charger %1: phone notifications %2").arg(state)
+                .arg(quietOnCharger() ? "come quietly" : "alert as usual");
+    });
 
     QDBusConnection session = QDBusConnection::sessionBus();
     session.connect(NOTIFICATIONS_SERVICE_NAME, NOTIFICATIONS_PATH_BASE,
@@ -1027,6 +1090,34 @@ bool NotificationService::silence(uint notificationId)
     return true;
 }
 
+bool NotificationService::setAppNotifications(uint notificationId, bool enabled)
+{
+    const int id = mKnownAndroidNotifs.key(notificationId, 0);
+    if(!id || !mPhoneActions.value(notificationId).contains("mute")) {
+        qInfo() << "App notifications" << (enabled ? "on" : "off") << "for" << notificationId
+                << ": not a phone notification that offers it";
+        return false;
+    }
+    if(!phoneConnected()) {
+        qInfo() << "App notifications" << (enabled ? "on" : "off") << "for" << id << ": no phone connected";
+        return false;
+    }
+    sendFeedback(id, enabled ? QStringLiteral("unmute") : QStringLiteral("mute"));
+    return true;
+}
+
+bool NotificationService::onCharger() const
+{
+    if(mChargerOverride >= 0)
+        return mChargerOverride == 1;
+    return mBattery && mBattery->chargerState() == QLatin1String("on");
+}
+
+bool NotificationService::quietOnCharger() const
+{
+    return onCharger() && MDConfItem(QuietOnChargerKey).value(true).toBool();
+}
+
 void NotificationService::remember(uint notificationId, const QStringList &phoneActions,
                                    const QList<QVariant> &callNotify, const QString &thread,
                                    uint content, const QString &key)
@@ -1145,7 +1236,7 @@ void NotificationService::post(const PhoneNotification &n)
     const QString shownBody = n.shownBody();
     const uint content = contentHash(n.summary, shownBody);
     const bool contentChanged = !replacesId || mContent.value(replacesId) != content;
-    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb);
+    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb, quietOnCharger());
     // The update that brings the watch's own reply: in place, quietly
     if(replacesId && mRepliedAt.contains(replacesId)) {
         const qint64 repliedAt = mRepliedAt.take(replacesId);
@@ -1168,6 +1259,9 @@ void NotificationService::post(const PhoneNotification &n)
         hints.insert(KeyHint, n.key);
     if(!n.category.isEmpty())
         hints.insert(CategoryHint, n.category);
+    // The conversation, message by message, for the full view (the body has it as lines)
+    if(!n.messages.isEmpty())
+        hints.insert(MessagesHint, n.messagesJson());
     // Its picture: the file, there or on its way (the launcher shows a placeholder of
     // that size until it is)
     if(!n.pictureId.isEmpty()) {
@@ -1282,7 +1376,9 @@ void NotificationService::post(const PhoneNotification &n)
     }
     qInfo().noquote() << QString("Phone notification %1: %2 (lipstick %3, %4, %5)").arg(id)
             .arg(plan.kind == PostPlan::New ? "new card" : plan.kind == PostPlan::Update ? "card updated" : "card posted anew")
-            .arg(lipstickId).arg(plan.preview ? "banner" : "no banner").arg(plan.vibrate ? "vibration" : "quiet");
+            .arg(lipstickId).arg(plan.preview ? "banner" : "no banner")
+            .arg(plan.vibrate ? QStringLiteral("vibration")
+                              : plan.quiet ? QStringLiteral("quiet: ") + QLatin1String(plan.quiet) : QStringLiteral("quiet"));
     if(!lipstickId)
         qWarning() << "Phone notification" << id << ": lipstick did not take it"
                    << (reply.type() == QDBusMessage::ErrorMessage ? reply.errorMessage() : QString());

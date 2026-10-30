@@ -13,7 +13,7 @@ target_link_libraries(assistant_test PRIVATE Qt6::Core)
 # The assistant relay follows the phone's link, on a private bus like
 # notifications_test
 add_executable(assistantlink_test assistantlink_test.cpp ../src/assistantservice.cpp ../src/assistantprotocol.cpp
-	../src/notificationservice.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(assistantlink_test PRIVATE ../src)
 target_link_libraries(assistantlink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
@@ -24,33 +24,33 @@ target_link_libraries(voice_test PRIVATE Qt6::Core)
 # Voice replies recognised on the watch, with a fake asteroid-assistant, on a
 # private bus like notifications_test
 add_executable(voicelocal_test voicelocal_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp
-	../src/notificationservice.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(voicelocal_test PRIVATE ../src)
 target_link_libraries(voicelocal_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
 # A voice reply recognised by the phone ends when the phone's link drops
 add_executable(voicelink_test voicelink_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp
-	../src/notificationservice.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(voicelink_test PRIVATE ../src)
 target_link_libraries(voicelink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
 # The notification service on a private bus (see the top of the source):
 # dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS notifications_test'
-add_executable(notifications_test notifications_test.cpp ../src/notificationservice.cpp
+add_executable(notifications_test notifications_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
 	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(notifications_test PRIVATE ../src)
 target_link_libraries(notifications_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
 # Notification pictures (reassembly, checks, reconnections, cleanup) on a private bus
 # like notifications_test
-add_executable(pictures_test pictures_test.cpp ../src/notificationservice.cpp
+add_executable(pictures_test pictures_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
 	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(pictures_test PRIVATE ../src)
 target_link_libraries(pictures_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
 # The phone status service (battery, Do Not Disturb, disconnected notice)
 # with the notification service, on a private bus like notifications_test
-add_executable(phonestatus_test phonestatus_test.cpp ../src/phonestatusservice.cpp ../src/notificationservice.cpp
+add_executable(phonestatus_test phonestatus_test.cpp ../src/phonestatusservice.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
 	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(phonestatus_test PRIVATE ../src)
 target_link_libraries(phonestatus_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
@@ -77,3 +77,12 @@ if(MKCAL_FOUND AND KCALCORE_FOUND)
 	target_include_directories(calendar_test PRIVATE ../src)
 	target_link_libraries(calendar_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MKCAL PkgConfig::KCALCORE PkgConfig::KEEPALIVE)
 endif()
+
+# M5 messaging polish: quiet on the charger (a fake mce), the user's own messages of a
+# conversation (<me>, the x-asteroid-messages hint), the app's notifications off and on
+# from the watch (SetAppNotifications); on a private bus with a dconf-service, like
+# weather_test
+add_executable(messaging_test messaging_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(messaging_test PRIVATE ../src)
+target_link_libraries(messaging_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
