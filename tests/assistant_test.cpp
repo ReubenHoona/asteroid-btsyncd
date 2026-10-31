@@ -65,6 +65,33 @@ int main(int argc, char **argv)
     check(!parseReply("<asr><id>x</id><tx>a</tx></asr>").valid, "bad id");
     check(!parseReply("<asr><tx>no id</tx></asr>").valid, "no id, no state");
 
+    // actions on the phone (version 2)
+    check(capabilitiesXml().contains("<version>2</version>") && capabilitiesXml().contains("<actions>1</actions>"), "capabilities");
+    const QByteArray nav = R"({"a":"nav","q":"Riverbend Park & <Mount Alder>","mode":"walking"})";
+    const QByteArray act = actXml(9, nav);
+    check(act.startsWith("<act><id>9</id><js>") && act.endsWith("</js></act>") && !act.contains("<Mount"), "act framing, escaped");
+    QXmlStreamReader xa(act);
+    QString js;
+    while (!xa.atEnd()) {
+        xa.readNext();
+        if (xa.isStartElement() && xa.name() == QLatin1String("js"))
+            js = xa.readElementText();
+    }
+    check(js.toUtf8() == nav, "the action comes back unchanged");
+    check(actCancelXml(9) == "<act><id>9</id><cancel/></act>", "act cancel");
+    r = parseReply("<asr><st>ready</st><ac>nav,contacts,sms</ac></asr>");
+    check(r.valid && r.hasActions && r.actions == QStringList({"nav", "contacts", "sms"}), "status with actions");
+    r = parseReply("<asr><st>unavailable</st><er>no-url</er><ac>nav</ac></asr>");
+    check(r.valid && r.state == QLatin1String("unavailable") && r.actions == QStringList({"nav"}), "actions without an answer server");
+    r = parseReply("<asr><st>ready</st></asr>");
+    check(r.valid && !r.hasActions && r.actions.isEmpty(), "an older phone: no actions");
+    r = parseReply(R"(<acr><id>9</id><js>{"ok":true,"how":"started"}</js></acr>)");
+    check(r.valid && r.act && r.id == 9 && r.json == QLatin1String(R"({"ok":true,"how":"started"})"), "action result");
+    r = parseReply(R"(<acr><id>10</id><js>{"ok":true,"c":[{"n":"Sam &amp; Co"}]}</js></acr>)");
+    check(r.valid && r.json.contains(QLatin1String("Sam & Co")), "action result unescaped");
+    check(!parseReply("<acr><js>{}</js></acr>").valid, "action result without an id");
+    check(!parseReply("<acr><id>3</id></acr>").valid, "action result without JSON");
+
     fprintf(stdout, "%d failed\n", failures);
     return failures ? 1 : 0;
 }

@@ -139,8 +139,12 @@ int main(int argc, char **argv)
     CHECK(gattCall(driver, CHR_RESULT, "WriteValue", {QByteArray("<vr><st>ready</st></vr>"), options}).type()
           == QDBusMessage::ReplyMessage);
     CHECK(api(driver, "Available").toBool());
+    // the assistant's "auto" choice: the phone itself listens
+    CHECK(api(driver, "PhoneAvailable").toBool());
 
-    // A reply is being spoken (streamed to the phone) when the link drops
+    // A reply is being spoken (streamed to the phone) when the link drops;
+    // "auto" (the default): the phone's recogniser, as it is there
+    qputenv("BTSYNCD_VOICE_RECOGNITION", "auto");
     CHECK(api(driver, "Start", {0u, wav}).toUInt() != 0);
     CHECK(waitFor([&] { return c.audio > 10; }));
     CHECK(api(driver, "State").toString() == "listening");
@@ -153,6 +157,7 @@ int main(int argc, char **argv)
     waitFor([] { return false; }, 500);
     CHECK(c.audio <= sent + 1);
     CHECK(!api(driver, "Available").toBool());
+    CHECK(!api(driver, "PhoneAvailable").toBool());
 
     if (failures)
         fprintf(stderr, "%d check(s) failed\n", failures);

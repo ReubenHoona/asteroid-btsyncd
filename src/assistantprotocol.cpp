@@ -38,9 +38,25 @@ QByteArray cancelXml(uint id)
     return "<ask><id>" + QByteArray::number(id) + "</id><cancel/></ask>";
 }
 
+QByteArray actXml(uint id, const QByteArray &actionJson)
+{
+    QByteArray out;
+    QXmlStreamWriter w(&out);
+    w.writeStartElement(QStringLiteral("act"));
+    w.writeTextElement(QStringLiteral("id"), QString::number(id));
+    w.writeTextElement(QStringLiteral("js"), QString::fromUtf8(actionJson));
+    w.writeEndElement();
+    return out;
+}
+
+QByteArray actCancelXml(uint id)
+{
+    return "<act><id>" + QByteArray::number(id) + "</id><cancel/></act>";
+}
+
 QByteArray capabilitiesXml()
 {
-    return QByteArrayLiteral("<capabilities><version>1</version></capabilities>");
+    return QByteArrayLiteral("<capabilities><version>2</version><actions>1</actions></capabilities>");
 }
 
 Reply parseReply(const QByteArray &xml)
@@ -52,8 +68,9 @@ Reply parseReply(const QByteArray &xml)
         x.readNext();
         if (x.isStartElement()) {
             const QStringView n = x.name();
-            if (n == QLatin1String("asr")) {
+            if (!inside && (n == QLatin1String("asr") || n == QLatin1String("acr"))) {
                 inside = true;
+                r.act = n == QLatin1String("acr");
             } else if (!inside) {
                 return Reply();
             } else if (n == QLatin1String("id")) {
@@ -67,11 +84,18 @@ Reply parseReply(const QByteArray &xml)
                 r.text = x.readElementText();
             } else if (n == QLatin1String("er")) {
                 r.error = x.readElementText().trimmed();
+            } else if (n == QLatin1String("js")) {
+                r.json = x.readElementText();
+            } else if (n == QLatin1String("ac")) {
+                r.hasActions = true;
+                for (const QString &a : x.readElementText().split(QLatin1Char(','), Qt::SkipEmptyParts))
+                    r.actions << a.trimmed();
             } else {
                 x.skipCurrentElement();
             }
-        } else if (x.isEndElement() && x.name() == QLatin1String("asr")) {
-            r.valid = r.id > 0 || !r.state.isEmpty();
+        } else if (x.isEndElement() && (x.name() == QLatin1String("asr") || x.name() == QLatin1String("acr"))) {
+            // an action's result has an id and its JSON; a status or an answer as before
+            r.valid = r.act ? (r.id > 0 && !r.json.isEmpty()) : (r.id > 0 || !r.state.isEmpty());
             return r;
         }
     }

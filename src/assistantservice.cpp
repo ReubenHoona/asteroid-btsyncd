@@ -23,6 +23,8 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QDebug>
 
 // Requests are a system prompt and a question, about 1 kB; replies a
@@ -34,6 +36,10 @@ static const int MaxReplySize = 8192;
 static const int ForgetMs = 30000;
 // When the phone's writes carry no mtu option (BlueZ < 5.62): the smallest
 static const int AssumedMtu = 23;
+// An action's result: directions and contacts come in a second or two; a
+// text message once the phone's network took it (Gadgetbridge waits up to 20 s)
+static const int ActResultMs = 15000;
+static const int SmsResultMs = 40000;
 
 static int optionMtu(const QVariantMap &options)
 {
@@ -53,17 +59,22 @@ public slots:
         // the watch may be asleep when the answer comes: hold while it is handled
         WakeHoldScope wake;
         mBuffer += value;
-        const int end = mBuffer.indexOf("</asr>");
-        if (end < 0) {
-            if (mBuffer.size() > MaxReplySize) {
-                qWarning() << "Assistant reply without an end, dropped";
-                mBuffer.clear();
+        for (;;) {
+            // an answer or status ends with </asr>, an action's result with </acr>
+            const int a = mBuffer.indexOf("</asr>");
+            const int c = mBuffer.indexOf("</acr>");
+            const int end = a < 0 ? c : c < 0 ? a : qMin(a, c);
+            if (end < 0) {
+                if (mBuffer.size() > MaxReplySize) {
+                    qWarning() << "Assistant reply without an end, dropped";
+                    mBuffer.clear();
+                }
+                return;
             }
-            return;
+            const QByteArray xml = mBuffer.left(end + 6);
+            mBuffer = mBuffer.mid(end + 6);
+            mService->onReply(xml, optionMtu(options));
         }
-        const QByteArray xml = mBuffer.left(end + 6);
-        mBuffer = mBuffer.mid(end + 6);
-        mService->onReply(xml, optionMtu(options));
     }
 
 private:
@@ -129,11 +140,15 @@ AssistantDBusApi::AssistantDBusApi(AssistantService *service) : QObject(service)
 {
     connect(service, &AssistantService::answered, this, &AssistantDBusApi::Answer);
     connect(service, &AssistantService::failed, this, &AssistantDBusApi::Failed);
+    connect(service, &AssistantService::actResult, this, &AssistantDBusApi::ActResult);
 }
 
 bool AssistantDBusApi::Available() { return mService->available(); }
 bool AssistantDBusApi::Ask(uint id, const QString &request) { return mService->ask(id, request.toUtf8()); }
 bool AssistantDBusApi::Cancel(uint id) { return mService->cancel(id); }
+QStringList AssistantDBusApi::Actions() { return mService->actions(); }
+bool AssistantDBusApi::Act(uint id, const QString &json) { return mService->act(id, json.toUtf8()); }
+bool AssistantDBusApi::CancelAct(uint id) { return mService->cancelAct(id); }
 
 AssistantService::AssistantService(int index, QDBusConnection bus, NotificationService *notifications, QObject *parent)
     : Service(bus, index, ASSISTANT_UUID, parent), mNotifications(notifications)
@@ -188,6 +203,59 @@ bool AssistantService::cancel(uint id)
     return true;
 }
 
+QStringList AssistantService::actions() const
+{
+    // as available(), without the answer server: actions work without one
+    if (!mRequests->notifying() || (mNotifications && !mNotifications->phoneConnected()))
+        return QStringList();
+    return mPhoneActions;
+}
+
+bool AssistantService::act(uint id, const QByteArray &json)
+{
+    if (id == 0 || json.isEmpty() || json.size() > MaxRequestSize || mActs.contains(id))
+        return false;
+    const QString a = QJsonDocument::fromJson(json).object().value(QStringLiteral("a")).toString();
+    if (a.isEmpty() || !actions().contains(a))
+        return false;
+    // the phone answers each in a few seconds (a text message: once the network took it)
+    QTimer *t = new QTimer(this);
+    t->setSingleShot(true);
+    connect(t, &QTimer::timeout, this, [this, id] {
+        qInfo() << "Assistant: action" << id << "got no result from the phone";
+        if (mRequests->notifying())
+            mRequests->send(AssistantProtocol::actCancelXml(id), mMtu);
+        endAct(id, QStringLiteral("{\"ok\":false,\"er\":\"timeout\"}"));
+    });
+    t->start(a == QLatin1String("sms") ? SmsResultMs : ActResultMs);
+    mActs.insert(id, t);
+    mRequests->send(AssistantProtocol::actXml(id, json), mMtu);
+    // the action's kind only: no place, name or message in the log
+    qInfo() << "Assistant: action" << id << a << "to the phone," << json.size() << "bytes";
+    return true;
+}
+
+bool AssistantService::cancelAct(uint id)
+{
+    QTimer *t = mActs.take(id);
+    if (!t)
+        return false;
+    t->deleteLater();
+    if (mRequests->notifying())
+        mRequests->send(AssistantProtocol::actCancelXml(id), mMtu);
+    return true;
+}
+
+void AssistantService::endAct(uint id, const QString &json)
+{
+    QTimer *t = mActs.take(id);
+    if (!t)
+        return;
+    t->stop();
+    t->deleteLater();
+    emit actResult(id, json);
+}
+
 void AssistantService::onReply(const QByteArray &xml, int mtu)
 {
     if (mtu > 0)
@@ -197,9 +265,21 @@ void AssistantService::onReply(const QByteArray &xml, int mtu)
         qWarning() << "Assistant: bad reply from the phone";
         return;
     }
+    if (r.act) {
+        if (!mActs.contains(r.id)) {
+            qDebug() << "Assistant: action result" << r.id << "nobody waits for";
+            return;
+        }
+        qInfo() << "Assistant: action" << r.id << "result from the phone," << r.json.size() << "bytes";
+        endAct(r.id, r.json);
+        return;
+    }
     if (!r.state.isEmpty()) {
         mPhoneReady = r.state == QLatin1String("ready");
-        qInfo() << "Assistant: the phone's relay is" << r.state << r.error << "MTU" << mMtu;
+        // an older Gadgetbridge says nothing about actions: none
+        mPhoneActions = r.hasActions ? r.actions : QStringList();
+        qInfo() << "Assistant: the phone's relay is" << r.state << r.error << "MTU" << mMtu
+                << "actions" << mPhoneActions.join(QLatin1Char(','));
         return;
     }
     if (!mWaiting.remove(r.id)) {
@@ -237,12 +317,17 @@ void AssistantService::phoneGone(const char *why)
     // its state on every connection), and with the MTU of that connection
     const bool wasReady = mPhoneReady;
     mPhoneReady = false;
+    mPhoneActions.clear();
     mMtu = 0;
     mTimeout.stop();
     const QSet<uint> waiting = mWaiting;
     mWaiting.clear();
-    if (wasReady || !waiting.isEmpty())
-        qInfo() << "Assistant: the phone is gone (" << why << "):" << waiting.size() << "question(s) failed";
+    const QList<uint> acts = mActs.keys();
+    if (wasReady || !waiting.isEmpty() || !acts.isEmpty())
+        qInfo() << "Assistant: the phone is gone (" << why << "):" << waiting.size() << "question(s) and"
+                << acts.size() << "action(s) failed";
     for (uint id : waiting)
         emit failed(id, QStringLiteral("disconnected"));
+    for (uint id : acts)
+        endAct(id, QStringLiteral("{\"ok\":false,\"er\":\"disconnected\"}"));
 }

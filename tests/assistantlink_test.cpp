@@ -45,6 +45,7 @@ class Collector : public QObject
 public:
     QByteArray requests;
     QList<QPair<uint, QString>> failed;
+    QList<QPair<uint, QString>> results;
 public slots:
     void propertiesChanged(const QString &, const QVariantMap &changed, const QStringList &)
     {
@@ -52,6 +53,7 @@ public slots:
             requests += changed.value("Value").toByteArray();
     }
     void onFailed(uint id, const QString &code) { failed << qMakePair(id, code); }
+    void onActResult(uint id, const QString &json) { results << qMakePair(id, json); }
 };
 
 static bool waitFor(const std::function<bool()> &cond, int ms = 3000)
@@ -112,6 +114,8 @@ int main(int argc, char **argv)
                          &collector, SLOT(propertiesChanged(QString, QVariantMap, QStringList))));
     CHECK(driver.connect(SERVICE_NAME, BTSYNCD_ASSISTANT_PATH, "org.asteroidos.btsyncd.Assistant", "Failed",
                          &collector, SLOT(onFailed(uint, QString))));
+    CHECK(driver.connect(SERVICE_NAME, BTSYNCD_ASSISTANT_PATH, "org.asteroidos.btsyncd.Assistant", "ActResult",
+                         &collector, SLOT(onActResult(uint, QString))));
     spin(200);
 
     // The phone connects: link, feedback and relay subscriptions, "ready"
@@ -145,6 +149,61 @@ int main(int argc, char **argv)
     CHECK(api(driver, "Available").toBool() == false);
     writeReply(driver, "<asr><st>ready</st></asr>");
     CHECK(api(driver, "Available").toBool() == true);
+
+    /* Actions on the phone (directions, contacts, text messages) */
+    // an older Gadgetbridge (no <ac>): none, and Act() refuses
+    CHECK(api(driver, "Actions").toStringList().isEmpty());
+    CHECK(api(driver, "Act", {20u, QStringLiteral("{\"a\":\"nav\",\"q\":\"Riverbend Park\"}")}).toBool() == false);
+    // Gadgetbridge 41 says what it does, also without an answer server
+    writeReply(driver, "<asr><st>unavailable</st><er>no-url</er><ac>nav,contacts,sms</ac></asr>");
+    CHECK(api(driver, "Available").toBool() == false);
+    CHECK(api(driver, "Actions").toStringList() == QStringList({"nav", "contacts", "sms"}));
+    collector.requests.clear();
+    CHECK(api(driver, "Act", {21u, QStringLiteral("{\"a\":\"nav\",\"q\":\"Riverbend Park\",\"mode\":\"walking\"}")}).toBool() == true);
+    CHECK(waitFor([&] { return collector.requests.endsWith("</act>"); }));
+    CHECK(collector.requests.startsWith("<act><id>21</id><js>{&quot;a&quot;:&quot;nav&quot;")
+          || collector.requests.startsWith("<act><id>21</id><js>{\"a\":\"nav\""));
+    // an action the phone does not do, a second Act() with the same id, an empty one: refused
+    CHECK(api(driver, "Act", {22u, QStringLiteral("{\"a\":\"call\",\"q\":\"Sam Carter\"}")}).toBool() == false);
+    CHECK(api(driver, "Act", {21u, QStringLiteral("{\"a\":\"nav\",\"q\":\"Mount Alder\"}")}).toBool() == false);
+    CHECK(api(driver, "Act", {23u, QStringLiteral("not json")}).toBool() == false);
+    // the result, in two writes (a long contact list does not fit in one)
+    QVariantMap options;
+    options.insert("mtu", 23);
+    CHECK(gattCall(driver, CHR_REPLY, "WriteValue", {QByteArray("<acr><id>21</id><js>{\"ok\":tr"), options}).type() == QDBusMessage::ReplyMessage);
+    CHECK(gattCall(driver, CHR_REPLY, "WriteValue", {QByteArray("ue,\"how\":\"started\"}</js></acr>"), options}).type() == QDBusMessage::ReplyMessage);
+    CHECK(waitFor([&] { return !collector.results.isEmpty(); }));
+    CHECK(collector.results.size() == 1 && collector.results.value(0).first == 21u
+          && collector.results.value(0).second == QLatin1String("{\"ok\":true,\"how\":\"started\"}"));
+    // a result nobody waits for (or a second one) is dropped
+    writeReply(driver, "<acr><id>21</id><js>{\"ok\":true}</js></acr>");
+    spin(200);
+    CHECK(collector.results.size() == 1);
+    // a status and a result in one write
+    CHECK(api(driver, "Act", {24u, QStringLiteral("{\"a\":\"contacts\",\"q\":\"sam\"}")}).toBool() == true);
+    writeReply(driver, "<asr><st>unavailable</st><er>no-url</er><ac>nav,contacts,sms</ac></asr><acr><id>24</id><js>{\"ok\":true,\"c\":[]}</js></acr>");
+    CHECK(waitFor([&] { return collector.results.size() == 2; }));
+    CHECK(collector.results.value(1).first == 24u);
+    // CancelAct: no result comes, the phone is told
+    CHECK(api(driver, "Act", {25u, QStringLiteral("{\"a\":\"sms\",\"k\":\"c1\",\"tx\":\"On my way\",\"dry\":true}")}).toBool() == true);
+    collector.requests.clear();
+    CHECK(api(driver, "CancelAct", {25u}).toBool() == true);
+    CHECK(waitFor([&] { return collector.requests.endsWith("<act><id>25</id><cancel/></act>"); }));
+    CHECK(api(driver, "CancelAct", {25u}).toBool() == false);
+    // the phone goes while an action waits: "disconnected" at once, and no actions
+    CHECK(api(driver, "Act", {26u, QStringLiteral("{\"a\":\"sms\",\"k\":\"c1\",\"tx\":\"On my way\",\"dry\":true}")}).toBool() == true);
+    notifications.setLinkConnected(false);
+    CHECK(waitFor([&] { return collector.results.size() == 3; }));
+    CHECK(collector.results.value(2).first == 26u
+          && collector.results.value(2).second == QLatin1String("{\"ok\":false,\"er\":\"disconnected\"}"));
+    CHECK(api(driver, "Actions").toStringList().isEmpty());
+    CHECK(api(driver, "Act", {27u, QStringLiteral("{\"a\":\"nav\",\"q\":\"Riverbend Park\"}")}).toBool() == false);
+    // back: actions once the phone says so again
+    notifications.setLinkConnected(true);
+    spin(200);
+    CHECK(api(driver, "Actions").toStringList().isEmpty());
+    writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms</ac></asr>");
+    CHECK(api(driver, "Actions").toStringList().size() == 3);
 
     if (failures)
         fprintf(stderr, "%d check(s) failed\n", failures);

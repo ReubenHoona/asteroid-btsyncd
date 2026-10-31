@@ -20,6 +20,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 
 /*
  * The assistant relay (service 0000D071): the watch's assistant
@@ -37,12 +38,30 @@
  *   <asr><st>unavailable</st><er>no-url</er></asr>
  *   <asr><id>7</id><tx>The answer.</tx></asr>
  *   <asr><id>7</id><er>timeout|offline|server|auth|bad-request</er></asr>
- * D003 (read): <capabilities><version>1</version></capabilities>
+ * D003 (read): <capabilities><version>2</version><actions>1</actions></capabilities>
+ *
+ * Actions on the phone (version 2: the assistant's directions and text
+ * messages; Gadgetbridge 41+). The phone says which it does in every status
+ * write, with or without an answer server:
+ *   <asr><st>ready</st><ac>nav,contacts,sms</ac></asr>
+ *   (no <ac>: an older Gadgetbridge, no actions)
+ * Watch to phone, on D001 like the questions, joined until </act>:
+ *   <act><id>9</id><js>{"a":"nav","q":"Riverbend Park","mode":"walking"}</js></act>
+ *   <act><id>9</id><js>{"a":"contacts","q":"sam carter i am late","split":true}</js></act>
+ *   <act><id>9</id><js>{"a":"sms","k":"c1","tx":"I'm late","dry":false}</js></act>
+ *   <act><id>9</id><cancel/></act>
+ *   js: the action as JSON (XML-escaped); btsyncd checks only its "a"
+ * Phone to watch, writes of D002, joined until </acr>:
+ *   <acr><id>9</id><js>{"ok":true,...} or {"ok":false,"er":"..."}</js></acr>
+ *   (the result of each action: asteroid-launcher's assistant/PhoneActions.qml)
+ * btsyncd itself answers {"ok":false,"er":"timeout"} or {"ok":false,"er":"disconnected"}.
  */
 namespace AssistantProtocol {
 
 QByteArray askXml(uint id, const QByteArray &requestJson);
 QByteArray cancelXml(uint id);
+QByteArray actXml(uint id, const QByteArray &actionJson);
+QByteArray actCancelXml(uint id);
 QByteArray capabilitiesXml();
 
 struct Reply {
@@ -51,6 +70,10 @@ struct Reply {
     QString state;     // ready | unavailable (a status write)
     QString text;      // the answer
     QString error;     // the reason, with unavailable or for a question
+    bool act = false;  // <acr>: an action's result, in json
+    QString json;
+    bool hasActions = false;    // a status that says what the phone does
+    QStringList actions;        // nav, contacts, sms
 };
 Reply parseReply(const QByteArray &xml);
 

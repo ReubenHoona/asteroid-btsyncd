@@ -20,7 +20,9 @@
 
 #include <QByteArray>
 #include <QObject>
+#include <QHash>
 #include <QSet>
+#include <QStringList>
 #include <QString>
 #include <QTimer>
 
@@ -65,6 +67,17 @@ private:
  * Signals Answer(u id, s text), Failed(u id, s code): timeout (no answer
  * from the phone in time), disconnected, or the phone's code (offline,
  * server, auth, no-url, bad-request).
+ *
+ * Actions on the phone (the launcher's assistant: directions, contacts, text
+ * messages; see assistantprotocol.h):
+ *   Actions() -> as        what the connected phone does now (nav, contacts,
+ *                          sms); empty: no phone, or a Gadgetbridge without them
+ *   Act(u id, s json) -> b json: {"a":"nav"|"contacts"|"sms", ...}; false when
+ *                          the phone is away or does not do "a"
+ *   CancelAct(u id) -> b
+ * Signal ActResult(u id, s json): the phone's result, or {"ok":false,"er":
+ * "timeout"|"disconnected"} from btsyncd. Every Act() that returned true gets
+ * exactly one.
  */
 class AssistantDBusApi : public QObject
 {
@@ -78,10 +91,14 @@ public slots:
     bool Available();
     bool Ask(uint id, const QString &request);
     bool Cancel(uint id);
+    QStringList Actions();
+    bool Act(uint id, const QString &json);
+    bool CancelAct(uint id);
 
 signals:
     void Answer(uint id, const QString &text);
     void Failed(uint id, const QString &code);
+    void ActResult(uint id, const QString &json);
 
 private:
     AssistantService *mService;
@@ -100,6 +117,9 @@ public:
     bool available() const;
     bool ask(uint id, const QByteArray &request);
     bool cancel(uint id);
+    QStringList actions() const;
+    bool act(uint id, const QByteArray &json);
+    bool cancelAct(uint id);
 
     // From the characteristics
     void onReply(const QByteArray &xml, int mtu);
@@ -108,19 +128,23 @@ public:
 signals:
     void answered(uint id, const QString &text);
     void failed(uint id, const QString &code);
+    void actResult(uint id, const QString &json);
 
 private:
     void expire();
     // The phone is gone (unsubscribed, or its link dropped): what waits fails
     void phoneGone(const char *why);
+    void endAct(uint id, const QString &json);
 
     NotificationService *mNotifications;
     AssistantRequestsChrc *mRequests;
     AssistantDBusApi *mApi;
     bool mPhoneReady = false;
+    QStringList mPhoneActions;
     int mMtu = 0;
     QSet<uint> mWaiting;
     QTimer mTimeout;
+    QHash<uint, QTimer *> mActs;   // actions waiting for the phone, each with its deadline
 };
 
 #endif // ASSISTANTSERVICE_H

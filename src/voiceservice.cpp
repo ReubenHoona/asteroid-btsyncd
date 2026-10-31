@@ -160,6 +160,7 @@ bool VoiceDBusApi::Stop() { return mService->stop(); }
 bool VoiceDBusApi::Cancel() { return mService->cancel(); }
 bool VoiceDBusApi::Send() { return mService->send(); }
 bool VoiceDBusApi::Available() { return mService->available(); }
+bool VoiceDBusApi::PhoneAvailable() { return mService->phoneListens(); }
 QString VoiceDBusApi::State() { return mService->state(); }
 
 VoiceService::VoiceService(int index, QDBusConnection bus, NotificationService *notifications, QObject *parent)
@@ -221,11 +222,16 @@ bool VoiceService::available() const
     return (localWanted() && localInstalled()) || phoneAvailable();
 }
 
-bool VoiceService::localWanted()
+QString VoiceService::recognitionMode()
 {
     const QString env = qEnvironmentVariable("BTSYNCD_VOICE_RECOGNITION");
     const QString v = !env.isEmpty() ? env : MDConfItem("/org/asteroidos/voice/recognition").value().toString();
-    return v != QLatin1String("phone");
+    return v == QLatin1String("phone") || v == QLatin1String("watch") ? v : QStringLiteral("auto");
+}
+
+bool VoiceService::localWanted()
+{
+    return recognitionMode() != QLatin1String("phone");
 }
 
 bool VoiceService::localInstalled()
@@ -429,6 +435,12 @@ uint VoiceService::start(uint notificationId, const QString &source)
     // "phone:...": the phone's recogniser whatever the setting
     if (source.startsWith(QLatin1String("phone:")))
         return startPhone(notificationId, source.mid(6));
+    // "auto": the phone's while it is there (the reply goes through it anyway),
+    // as Wear OS; the watch's when it is not
+    if (recognitionMode() == QLatin1String("auto") && phoneListens()) {
+        qInfo() << "Voice: recognition auto: the phone's";
+        return startPhone(notificationId, source);
+    }
     if (localWanted() && localInstalled()) {
         const uint sid = startLocal(notificationId, source);
         if (sid)

@@ -70,15 +70,19 @@ private:
  *     "phone:" before any of them: the phone's recogniser whatever the
  *     setting.
  *     Where the speech is recognised: dconf /org/asteroidos/voice/recognition
- *     "watch" (the default: asteroid-assistant's Dictate, the same on-watch
- *     recogniser as the assistant; the phone's only when the watch's cannot
- *     load) or "phone" (streamed to Gadgetbridge, as before).
+ *     "auto" (the default: the phone's recogniser while the phone is
+ *     connected and does voice replies, as Wear OS, else the watch's),
+ *     "watch" (asteroid-assistant's Dictate, the same on-watch recogniser as
+ *     the assistant; the phone's only when the watch's cannot load) or
+ *     "phone" (streamed to Gadgetbridge only).
  *   Stop()   the user finished speaking: the phone gives the final text
  *   Cancel() drop the session
  *   Send()   reply to the notification with the final text (the existing
  *            reply path, as Notifications.Reply)
  *   Available() speech can be recognised: on the watch, or by a connected
  *     phone that does voice replies
+ *   PhoneAvailable() a connected phone does voice replies (its recogniser
+ *     can take the microphone now): asteroid-assistant's "auto" choice
  *   State()  idle | listening | recognising | done
  * Signals Partial(s text), Final(s text), Error(s code).
  */
@@ -96,6 +100,7 @@ public slots:
     bool Cancel();
     bool Send();
     bool Available();
+    bool PhoneAvailable();
     QString State();
 
 signals:
@@ -122,6 +127,8 @@ public:
     bool cancel();
     bool send();
     bool available() const;
+    // a connected phone does voice replies, with an MTU that takes audio
+    bool phoneListens() const { return phoneAvailable() && framesPerNotification() >= 1; }
     QString state() const;
 
     // From the characteristics
@@ -152,6 +159,8 @@ private:
     bool phoneAvailable() const;
     /* The watch's recogniser is there (asteroid-assistant, its helper and
      * model) and the setting says the watch */
+    // the setting: auto | watch | phone
+    static QString recognitionMode();
     static bool localWanted();
     static bool localInstalled();
     uint startPhone(uint notificationId, const QString &source);
