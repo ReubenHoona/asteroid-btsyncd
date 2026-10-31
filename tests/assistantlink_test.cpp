@@ -20,10 +20,18 @@
 // dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS assistantlink_test'
 
 #include "assistantservice.h"
+#include "contactnames.h"
 #include "notificationservice.h"
 #include "common.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
+#include <QFile>
+#include <QTemporaryDir>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QElapsedTimer>
@@ -38,6 +46,7 @@ static int failures = 0;
 static const char *CHR_FEEDBACK = "/org/asteroidos/btsyncd/service0/char1";
 static const char *CHR_REQUEST = "/org/asteroidos/btsyncd/service10/char0";
 static const char *CHR_REPLY = "/org/asteroidos/btsyncd/service10/char1";
+static const char *CHR_CAPS = "/org/asteroidos/btsyncd/service10/char2";
 
 class Collector : public QObject
 {
@@ -96,8 +105,75 @@ static void writeReply(QDBusConnection &driver, const QByteArray &xml)
     CHECK(gattCall(driver, CHR_REPLY, "WriteValue", {xml, options}).type() == QDBusMessage::ReplyMessage);
 }
 
+// An invented phone book: 25 first names x 40 surnames = 1000 people, and the first names
+static QStringList inventedBook()
+{
+    const QStringList first = {"Sam", "Priya", "Lena", "Tomasz", "Hana", "Declan", "Aisha", "Mateo", "Freya", "Marcus",
+                               "Iris", "Owen", "Nadia", "Ravi", "Elsa", "Kofi", "Yara", "Bruno", "Mei", "Tariq",
+                               "Ines", "Joaquin", "Saoirse", "Anouk", "Bjorn"};
+    const QStringList last = {"Carter", "Natarajan", "Okafor", "Wielicki", "Moriyama", "Rourke", "Rahman", "Alvarez",
+                              "Lindqvist", "Bell", "Quillon", "Ashdown", "Brackley", "Fenwick", "Galloway", "Harrow",
+                              "Ingram", "Jessop", "Kestrel", "Lowther", "Marlow", "Northcote", "Ormsby", "Penrose",
+                              "Radley", "Sallow", "Thorne", "Underwood", "Varley", "Whitlock", "Yardley", "Zeller",
+                              "Amberley", "Birchall", "Coldwell", "Dunmore", "Elstow", "Farrant", "Gisburn", "Hallam"};
+    QStringList book;
+    for (const QString &f : first)
+        for (const QString &l : last)
+            book << f + QLatin1Char(' ') + l;
+    book += first;
+    return book;
+}
+
+// The book as Gadgetbridge sends it: parts of at most about 3 kB of XML
+static QList<QByteArray> namesParts(const QStringList &book, const QByteArray &generation)
+{
+    QList<QStringList> groups;
+    QStringList cur;
+    int bytes = 0;
+    for (const QString &n : book) {
+        const int b = n.toUtf8().size() + 7;
+        if (bytes + b > 3000 && !cur.isEmpty()) {
+            groups << cur;
+            cur.clear();
+            bytes = 0;
+        }
+        cur << n;
+        bytes += b;
+    }
+    if (!cur.isEmpty())
+        groups << cur;
+    QList<QByteArray> out;
+    for (int i = 0; i < groups.size(); i++) {
+        QByteArray x = "<cn><g>" + generation + "</g><i>" + QByteArray::number(i) + "</i><n>" + QByteArray::number(groups.size()) + "</n>";
+        for (const QString &n : groups.at(i))
+            x += "<v>" + n.toUtf8().replace("&", "&amp;").replace("<", "&lt;") + "</v>";
+        out << x + "</cn>";
+    }
+    return out;
+}
+
+// As the phone writes: pieces of at most 244 bytes (MTU 247), a piece may end inside a name
+static void writeInPieces(QDBusConnection &driver, const QByteArray &xml)
+{
+    QVariantMap options;
+    options.insert("mtu", 247);
+    for (int pos = 0; pos < xml.size(); pos += 244)
+        CHECK(gattCall(driver, CHR_REPLY, "WriteValue", {xml.mid(pos, 244), options}).type() == QDBusMessage::ReplyMessage);
+}
+
+static QByteArray readCaps(QDBusConnection &driver)
+{
+    const QDBusMessage r = gattCall(driver, CHR_CAPS, "ReadValue", {QVariantMap()});
+    CHECK(r.type() == QDBusMessage::ReplyMessage);
+    return r.arguments().value(0).toByteArray();
+}
+
 int main(int argc, char **argv)
 {
+    // the contact names go to a private directory (never ~/.local/share of whoever runs this)
+    QTemporaryDir names;
+    const QString namesFile = names.path() + QStringLiteral("/share/asteroid-assistant/stt-context.txt");
+    qputenv("BTSYNCD_STT_CONTEXT", namesFile.toUtf8());
     QCoreApplication app(argc, argv);
     if (qEnvironmentVariableIsEmpty("DBUS_SESSION_BUS_ADDRESS") || qEnvironmentVariableIsEmpty("DBUS_SYSTEM_BUS_ADDRESS")) {
         fprintf(stderr, "needs a private bus as session and system bus (see the top of the source)\n");
@@ -204,6 +280,65 @@ int main(int argc, char **argv)
     CHECK(api(driver, "Actions").toStringList().isEmpty());
     writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms</ac></asr>");
     CHECK(api(driver, "Actions").toStringList().size() == 3);
+
+    /* Contact names for the recogniser (version 3) */
+    CHECK(readCaps(driver).contains("<version>3</version>") && readCaps(driver).contains("<names></names>"));
+    const QStringList book = inventedBook();
+    const QList<QByteArray> parts = namesParts(book, "b1");
+    CHECK(parts.size() >= 4);                       // 1025 phrases do not fit in one part
+    for (const QByteArray &p : parts)
+        CHECK(p.size() < 8192);                     // what the characteristic joins at most
+    // an incomplete list writes nothing
+    writeInPieces(driver, parts.value(0));
+    spin(200);
+    CHECK(!QFile::exists(namesFile));
+    // all parts, the first again, out of order: one list, written once, in order
+    for (int i = parts.size() - 1; i >= 0; i--)
+        writeInPieces(driver, parts.at(i));
+    CHECK(waitFor([&] { return QFile::exists(namesFile); }));
+    QFile f(namesFile);
+    CHECK(f.open(QIODevice::ReadOnly));
+    const QByteArray data = f.readAll();
+    f.close();
+    CHECK(data == ContactNames::content(book));
+    CHECK(data.count('\n') == 1025);
+    struct stat st;
+    CHECK(::stat(QFile::encodeName(namesFile).constData(), &st) == 0);
+    CHECK((st.st_mode & 0777) == 0600);             // only its owner reads it
+    CHECK(st.st_uid == ::getuid());                 // btsyncd's user (ceres on the watch)
+    CHECK(::stat(QFile::encodeName(QFileInfo(namesFile).absolutePath()).constData(), &st) == 0 && (st.st_mode & 0777) == 0700);
+    // atomic: no temporary file left beside it
+    CHECK(QDir(QFileInfo(namesFile).absolutePath()).entryList(QDir::Files | QDir::Hidden | QDir::System).size() == 1);
+    // the capabilities say which list the watch has
+    const QByteArray expect = QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex().left(16);
+    CHECK(readCaps(driver).contains("<names>" + expect + "</names>"));
+    // a new list replaces it (a status write and a part in one write as well)
+    writeInPieces(driver, "<asr><st>ready</st><ac>nav,contacts,sms</ac></asr><cn><g>b2</g><i>0</i><n>1</n><v>Sam Carter</v><v>Lena Okafor</v></cn>");
+    CHECK(waitFor([&] { QFile g(namesFile); return g.open(QIODevice::ReadOnly) && g.readAll() == "Sam Carter\nLena Okafor\n"; }));
+    CHECK(api(driver, "Actions").toStringList().size() == 3);
+    CHECK(::stat(QFile::encodeName(namesFile).constData(), &st) == 0 && (st.st_mode & 0777) == 0600);
+    // the same hash as Gadgetbridge's for this list (AsteroidOSContactNamesTest)
+    CHECK(readCaps(driver).contains("<names>2737840c6dedb929</names>"));
+    // the setting off on the phone: the list goes
+    writeInPieces(driver, "<cn><off/></cn>");
+    CHECK(waitFor([&] { return !QFile::exists(namesFile); }));
+    CHECK(readCaps(driver).contains("<names></names>"));
+    // a list half sent when the phone goes is dropped (it comes again in full)
+    writeInPieces(driver, parts.value(0));
+    writeInPieces(driver, parts.value(1));
+    notifications.setLinkConnected(false);
+    spin(200);
+    notifications.setLinkConnected(true);
+    for (int i = 2; i < parts.size(); i++)
+        writeInPieces(driver, parts.at(i));
+    spin(300);
+    CHECK(!QFile::exists(namesFile));
+    // unpaired (no device bonded any more): ContactNames::remove, as main.cpp connects it
+    for (const QByteArray &p : namesParts(book, "b3"))
+        writeInPieces(driver, p);
+    CHECK(waitFor([&] { return QFile::exists(namesFile); }));
+    CHECK(ContactNames::remove("test: unpaired"));
+    CHECK(!QFile::exists(namesFile) && !ContactNames::remove("again"));
 
     if (failures)
         fprintf(stderr, "%d check(s) failed\n", failures);

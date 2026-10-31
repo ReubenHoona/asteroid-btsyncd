@@ -106,6 +106,7 @@ void BlueZManager::updateAdapter() {
     bool connected = false;
     bool servicesResolved = false;
     bool powered = false;
+    bool paired = false;
 
     QDBusInterface remoteOm(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, mBus);
     QDBusMessage result = remoteOm.call("GetManagedObjects");
@@ -144,6 +145,10 @@ void BlueZManager::updateAdapter() {
                  if(properties.contains("ServicesResolved"))
                     servicesResolved |= properties.value("ServicesResolved").toBool();
 
+                 // a bond (a phone the watch knows): BlueZ 5.67+ also says Bonded
+                 if (properties.value("Paired").toBool() || properties.value("Bonded").toBool())
+                    paired = true;
+
             }
         }
         argument.endMap();
@@ -168,6 +173,13 @@ void BlueZManager::updateAdapter() {
     mPowered = powered;
     setConnected(connected);
     setServicesResolved(servicesResolved);
+    // what the phone gave this watch goes with the last bond (the contact names)
+    if (!adapter.isEmpty()) {
+        if (!paired && (mPaired || !mPairedKnown))
+            emit noDevicePaired();
+        mPaired = paired;
+        mPairedKnown = true;
+    }
 }
 
 void BlueZManager::setAdapter(QString adapter)
@@ -291,7 +303,7 @@ void BlueZManager::PropertiesChanged(QString interface, QMap<QString, QVariant> 
     // only for what it reads. A device's RSSI, ManufacturerData or TxPower
     // change with every advertisement it sends while the adapter discovers.
     static const QStringList deviceKeys = { QStringLiteral("Connected"), QStringLiteral("ServicesResolved"),
-                                            QStringLiteral("Alias") };
+                                            QStringLiteral("Alias"), QStringLiteral("Paired"), QStringLiteral("Bonded") };
     static const QStringList adapterKeys = { QStringLiteral("Powered") };
     const QStringList *keys;
     if (interface == QLatin1String(DEVICE_MANAGER_IFACE))

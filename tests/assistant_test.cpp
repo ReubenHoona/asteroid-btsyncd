@@ -18,6 +18,7 @@
 // The assistant relay's XML (see assistantprotocol.h), without D-Bus
 
 #include "assistantprotocol.h"
+#include "contactnames.h"
 
 #include <QCoreApplication>
 #include <QXmlStreamReader>
@@ -66,7 +67,7 @@ int main(int argc, char **argv)
     check(!parseReply("<asr><tx>no id</tx></asr>").valid, "no id, no state");
 
     // actions on the phone (version 2)
-    check(capabilitiesXml().contains("<version>2</version>") && capabilitiesXml().contains("<actions>1</actions>"), "capabilities");
+    check(capabilitiesXml().contains("<version>3</version>") && capabilitiesXml().contains("<actions>1</actions>"), "capabilities");
     const QByteArray nav = R"({"a":"nav","q":"Riverbend Park & <Mount Alder>","mode":"walking"})";
     const QByteArray act = actXml(9, nav);
     check(act.startsWith("<act><id>9</id><js>") && act.endsWith("</js></act>") && !act.contains("<Mount"), "act framing, escaped");
@@ -91,6 +92,40 @@ int main(int argc, char **argv)
     check(r.valid && r.json.contains(QLatin1String("Sam & Co")), "action result unescaped");
     check(!parseReply("<acr><js>{}</js></acr>").valid, "action result without an id");
     check(!parseReply("<acr><id>3</id></acr>").valid, "action result without JSON");
+
+    // contact names for the recogniser (version 3), invented names
+    check(capabilitiesXml("0123456789abcdef").contains("<version>3</version>")
+          && capabilitiesXml("0123456789abcdef").contains("<names>0123456789abcdef</names>")
+          && capabilitiesXml().contains("<names></names>"), "capabilities with the names' hash");
+    r = parseReply("<cn><g>a1</g><i>1</i><n>3</n><v>Sam Carter</v><v>Sam</v><v>Lena &amp; Co</v></cn>");
+    check(r.valid && r.names && !r.namesOff && r.namesGeneration == QLatin1String("a1") && r.namesIndex == 1
+          && r.namesTotal == 3 && r.namesList == QStringList({"Sam Carter", "Sam", "Lena & Co"}), "a part of the names");
+    r = parseReply("<cn><off/></cn>");
+    check(r.valid && r.names && r.namesOff, "names off");
+    check(!parseReply("<cn><g>a1</g><i>3</i><n>3</n><v>Sam</v></cn>").valid, "a part past the end");
+    check(!parseReply("<cn><i>0</i><n>1</n><v>Sam</v></cn>").valid, "a part without its list");
+    check(!parseReply("<cn><g>a1</g><i>x</i><n>1</n></cn>").valid, "a bad index");
+
+    // cleaning: what asteroid-assistant-stt reads (no comment, no bonus, 96 bytes, no repeats)
+    const QStringList c = ContactNames::clean({"Sam Carter", "sam carter", "  Priya\tNatarajan ", "#Lena", "Hana: 3",
+                                              "1234", "", QString(120, QLatin1Char('a')), QString::fromUtf8("José Álvarez")});
+    check(c.size() == 6 && c.at(0) == QLatin1String("Sam Carter") && c.at(1) == QLatin1String("Priya Natarajan")
+          && c.at(2) == QLatin1String("Lena") && c.at(3) == QLatin1String("Hana 3") && c.at(4).toUtf8().size() == 96
+          && c.at(5) == QString::fromUtf8("José Álvarez"), (QByteArray("names cleaned: ") + c.join(QLatin1Char('|')).left(120).toUtf8()).constData());
+    QStringList many;
+    for (int i = 0; i < 3500; i++)
+        many << QStringLiteral("Contact %1x").arg(i);
+    check(ContactNames::clean(many).size() == ContactNames::MaxPhrases, "at most 3000 phrases");
+    check(ContactNames::content({"Sam Carter", "Sam"}) == "Sam Carter\nSam\n", "the file's lines");
+
+    // the parts of a list, in any order; a new list drops the old one's parts
+    ContactNames::Assembler as;
+    check(!as.add("g1", 1, 3, {"Lena Okafor"}), "part 2 of 3");
+    check(!as.add("g1", 0, 3, {"Sam Carter"}), "part 1 of 3");
+    check(!as.add("g2", 0, 2, {"Freya Lindqvist"}) && as.partsHeld() == 1, "a new list starts over");
+    check(as.add("g2", 1, 2, {"Marcus Bell"}), "its last part completes it");
+    check(as.take() == QStringList({"Freya Lindqvist", "Marcus Bell"}) && as.partsHeld() == 0, "the list in order");
+    check(!as.add("g3", 5, 2, {"x"}) && !as.add("g3", 0, 0, {"x"}) && !as.add("", 0, 1, {"x"}), "bad parts refused");
 
     fprintf(stdout, "%d failed\n", failures);
     return failures ? 1 : 0;

@@ -26,7 +26,9 @@
 #include <QString>
 #include <QTimer>
 
+#include "assistantprotocol.h"
 #include "characteristic.h"
+#include "contactnames.h"
 #include "service.h"
 
 class AssistantService;
@@ -135,6 +137,8 @@ private:
     // The phone is gone (unsubscribed, or its link dropped): what waits fails
     void phoneGone(const char *why);
     void endAct(uint id, const QString &json);
+    // A part of the phone's contact names, or "off" (contactnames.h)
+    void onNames(const AssistantProtocol::Reply &r);
 
     NotificationService *mNotifications;
     AssistantRequestsChrc *mRequests;
@@ -145,6 +149,7 @@ private:
     QSet<uint> mWaiting;
     QTimer mTimeout;
     QHash<uint, QTimer *> mActs;   // actions waiting for the phone, each with its deadline
+    ContactNames::Assembler mNames;
 };
 
 #endif // ASSISTANTSERVICE_H

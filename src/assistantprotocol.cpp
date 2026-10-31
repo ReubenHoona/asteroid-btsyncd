@@ -54,9 +54,47 @@ QByteArray actCancelXml(uint id)
     return "<act><id>" + QByteArray::number(id) + "</id><cancel/></act>";
 }
 
-QByteArray capabilitiesXml()
+QByteArray capabilitiesXml(const QByteArray &namesHash)
 {
-    return QByteArrayLiteral("<capabilities><version>2</version><actions>1</actions></capabilities>");
+    return "<capabilities><version>3</version><actions>1</actions><names>" + namesHash + "</names></capabilities>";
+}
+
+// <cn>...</cn>: a part of the contact names, or <off/>
+static Reply parseNames(QXmlStreamReader &x)
+{
+    Reply r;
+    r.names = true;
+    while (!x.atEnd()) {
+        x.readNext();
+        if (x.isStartElement()) {
+            const QStringView n = x.name();
+            if (n == QLatin1String("off")) {
+                r.namesOff = true;
+                x.skipCurrentElement();
+            } else if (n == QLatin1String("g")) {
+                r.namesGeneration = x.readElementText().trimmed().left(32);
+            } else if (n == QLatin1String("i")) {
+                bool ok = false;
+                r.namesIndex = x.readElementText().trimmed().toInt(&ok);
+                if (!ok)
+                    return Reply();
+            } else if (n == QLatin1String("n")) {
+                bool ok = false;
+                r.namesTotal = x.readElementText().trimmed().toInt(&ok);
+                if (!ok)
+                    return Reply();
+            } else if (n == QLatin1String("v")) {
+                r.namesList << x.readElementText();
+            } else {
+                x.skipCurrentElement();
+            }
+        } else if (x.isEndElement() && x.name() == QLatin1String("cn")) {
+            r.valid = r.namesOff || (!r.namesGeneration.isEmpty() && r.namesTotal > 0
+                                     && r.namesIndex >= 0 && r.namesIndex < r.namesTotal);
+            return r.valid ? r : Reply();
+        }
+    }
+    return Reply();
 }
 
 Reply parseReply(const QByteArray &xml)
@@ -68,6 +106,8 @@ Reply parseReply(const QByteArray &xml)
         x.readNext();
         if (x.isStartElement()) {
             const QStringView n = x.name();
+            if (!inside && n == QLatin1String("cn"))
+                return parseNames(x);
             if (!inside && (n == QLatin1String("asr") || n == QLatin1String("acr"))) {
                 inside = true;
                 r.act = n == QLatin1String("acr");

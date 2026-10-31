@@ -6,13 +6,13 @@ target_include_directories(healthrecords_test PRIVATE ../src)
 target_link_libraries(healthrecords_test PRIVATE Qt6::Core)
 
 # The assistant relay's XML
-add_executable(assistant_test assistant_test.cpp ../src/assistantprotocol.cpp)
+add_executable(assistant_test assistant_test.cpp ../src/assistantprotocol.cpp ../src/contactnames.cpp)
 target_include_directories(assistant_test PRIVATE ../src)
 target_link_libraries(assistant_test PRIVATE Qt6::Core)
 
 # The assistant relay follows the phone's link, on a private bus like
 # notifications_test
-add_executable(assistantlink_test assistantlink_test.cpp ../src/assistantservice.cpp ../src/assistantprotocol.cpp
+add_executable(assistantlink_test assistantlink_test.cpp ../src/assistantservice.cpp ../src/assistantprotocol.cpp ../src/contactnames.cpp
 	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(assistantlink_test PRIVATE ../src)
 target_link_libraries(assistantlink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)

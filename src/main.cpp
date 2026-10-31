@@ -25,6 +25,7 @@
 #include "application.h"
 #include "advertisement.h"
 #include "bluezmanager.h"
+#include "contactnames.h"
 
 int main(int argc, char **argv)
 {
@@ -55,6 +56,8 @@ int main(int argc, char **argv)
     // NotificationService::setLinkConnected)
     QObject::connect(&bm, &BlueZManager::connectedChanged, &app, [&app, &bm] { app.setPhoneLink(bm.connected()); });
     app.setPhoneLink(bm.connected());
+    // the phone's contact names go with its bond (unpaired on the watch, or reset)
+    QObject::connect(&bm, &BlueZManager::noDevicePaired, &app, [] { ContactNames::remove("no phone is paired"); });
 
     qcoreapp.exec();
     return 0;

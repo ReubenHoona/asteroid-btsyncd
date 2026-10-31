@@ -18,6 +18,7 @@
 #include "assistantservice.h"
 #include "assistantprotocol.h"
 #include "common.h"
+#include "contactnames.h"
 #include "notificationservice.h"
 #include "wakehold.h"
 
@@ -60,10 +61,16 @@ public slots:
         WakeHoldScope wake;
         mBuffer += value;
         for (;;) {
-            // an answer or status ends with </asr>, an action's result with </acr>
-            const int a = mBuffer.indexOf("</asr>");
-            const int c = mBuffer.indexOf("</acr>");
-            const int end = a < 0 ? c : c < 0 ? a : qMin(a, c);
+            // an answer or status ends with </asr>, an action's result with
+            // </acr>, a part of the contact names with </cn>
+            int end = -1, tag = 0;
+            for (const char *t : {"</asr>", "</acr>", "</cn>"}) {
+                const int at = mBuffer.indexOf(t);
+                if (at >= 0 && (end < 0 || at < end)) {
+                    end = at;
+                    tag = int(qstrlen(t));
+                }
+            }
             if (end < 0) {
                 if (mBuffer.size() > MaxReplySize) {
                     qWarning() << "Assistant reply without an end, dropped";
@@ -71,8 +78,8 @@ public slots:
                 }
                 return;
             }
-            const QByteArray xml = mBuffer.left(end + 6);
-            mBuffer = mBuffer.mid(end + 6);
+            const QByteArray xml = mBuffer.left(end + tag);
+            mBuffer = mBuffer.mid(end + tag);
             mService->onReply(xml, optionMtu(options));
         }
     }
@@ -91,7 +98,8 @@ public:
 public slots:
     QByteArray ReadValue(QVariantMap options) override
     {
-        const QByteArray value = AssistantProtocol::capabilitiesXml();
+        // with the hash of the contact names the watch has: the phone sends them when it differs
+        const QByteArray value = AssistantProtocol::capabilitiesXml(ContactNames::hash());
         const int offset = options.value("offset", 0).toInt();
         return offset > 0 ? value.mid(offset) : value;
     }
@@ -265,6 +273,10 @@ void AssistantService::onReply(const QByteArray &xml, int mtu)
         qWarning() << "Assistant: bad reply from the phone";
         return;
     }
+    if (r.names) {
+        onNames(r);
+        return;
+    }
     if (r.act) {
         if (!mActs.contains(r.id)) {
             qDebug() << "Assistant: action result" << r.id << "nobody waits for";
@@ -295,6 +307,26 @@ void AssistantService::onReply(const QByteArray &xml, int mtu)
     }
 }
 
+void AssistantService::onNames(const AssistantProtocol::Reply &r)
+{
+    if (r.namesOff) {
+        mNames.reset();
+        if (!ContactNames::remove("the phone's setting is off"))
+            qInfo() << "Assistant: contact names off on the phone (the watch had none)";
+        return;
+    }
+    if (!mNames.add(r.namesGeneration, r.namesIndex, r.namesTotal, r.namesList))
+        return;
+    const QStringList all = mNames.take();
+    const QStringList phrases = ContactNames::clean(all);
+    QString error;
+    // counts only: a name never goes to the log
+    if (ContactNames::write(phrases, &error))
+        qInfo() << "Assistant: contact names from the phone:" << phrases.size() << "phrases in" << r.namesTotal << "part(s)";
+    else
+        qWarning() << "Assistant: the contact names were not written:" << error;
+}
+
 void AssistantService::expire()
 {
     const QSet<uint> waiting = mWaiting;
@@ -318,6 +350,8 @@ void AssistantService::phoneGone(const char *why)
     const bool wasReady = mPhoneReady;
     mPhoneReady = false;
     mPhoneActions.clear();
+    // a list half sent comes again in full at the next connection
+    mNames.reset();
     mMtu = 0;
     mTimeout.stop();
     const QSet<uint> waiting = mWaiting;

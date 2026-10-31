@@ -38,7 +38,9 @@
  *   <asr><st>unavailable</st><er>no-url</er></asr>
  *   <asr><id>7</id><tx>The answer.</tx></asr>
  *   <asr><id>7</id><er>timeout|offline|server|auth|bad-request</er></asr>
- * D003 (read): <capabilities><version>2</version><actions>1</actions></capabilities>
+ * D003 (read): <capabilities><version>3</version><actions>1</actions><names>HASH</names></capabilities>
+ *   names: the watch takes the phone's contact names (version 3) and has the
+ *   list whose hash is HASH (contactnames.h; empty: none)
  *
  * Actions on the phone (version 2: the assistant's directions and text
  * messages; Gadgetbridge 41+). The phone says which it does in every status
@@ -55,6 +57,13 @@
  *   <acr><id>9</id><js>{"ok":true,...} or {"ok":false,"er":"..."}</js></acr>
  *   (the result of each action: asteroid-launcher's assistant/PhoneActions.qml)
  * btsyncd itself answers {"ok":false,"er":"timeout"} or {"ok":false,"er":"disconnected"}.
+ *
+ * Contact names for the watch's speech recogniser (version 3; the user agreed to
+ * names only, never numbers), phone to watch on D002, each part joined until </cn>:
+ *   <cn><g>GEN</g><i>0</i><n>5</n><v>Sam Carter</v><v>Sam</v>...</cn>
+ *     part i of n of the list GEN (a new GEN starts over); each part at most a
+ *     few kB, so 500-1000 names take several parts
+ *   <cn><off/></cn>     the setting is off on the phone: the watch drops its list
  */
 namespace AssistantProtocol {
 
@@ -62,7 +71,7 @@ QByteArray askXml(uint id, const QByteArray &requestJson);
 QByteArray cancelXml(uint id);
 QByteArray actXml(uint id, const QByteArray &actionJson);
 QByteArray actCancelXml(uint id);
-QByteArray capabilitiesXml();
+QByteArray capabilitiesXml(const QByteArray &namesHash = QByteArray());
 
 struct Reply {
     bool valid = false;
@@ -74,6 +83,12 @@ struct Reply {
     QString json;
     bool hasActions = false;    // a status that says what the phone does
     QStringList actions;        // nav, contacts, sms
+    bool names = false;         // <cn>: contact names (a part, or off)
+    bool namesOff = false;
+    QString namesGeneration;
+    int namesIndex = -1;
+    int namesTotal = 0;
+    QStringList namesList;
 };
 Reply parseReply(const QByteArray &xml);
 

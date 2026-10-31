@@ -27,6 +27,7 @@ set(
 	phonestatusservice.cpp
 	assistantprotocol.cpp
 	assistantservice.cpp
+	contactnames.cpp
 )
 set(
 	HEADERS

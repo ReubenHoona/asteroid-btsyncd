@@ -50,6 +50,9 @@ private:
     // The adapter's Powered property: after a power cycle BlueZ still lists
     // the advertisement, but the controller no longer sends it
     bool mPowered = false;
+    // A device is paired (bonded); known once BlueZ answered with an adapter
+    bool mPaired = false;
+    bool mPairedKnown = false;
     // An adapter object appeared (again): register everything even when its
     // path is the one we had
     bool mRegisterAll = false;
@@ -74,6 +77,8 @@ private slots:
 
 signals:
     void connectedChanged();
+    // No device is paired with the watch (any more, or when btsyncd started)
+    void noDevicePaired();
     void adapterChanged();
     void servicesResolvedChanged();
 
