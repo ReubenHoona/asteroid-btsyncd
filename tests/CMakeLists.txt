@@ -17,19 +17,19 @@ add_executable(assistantlink_test assistantlink_test.cpp ../src/assistantservice
 target_include_directories(assistantlink_test PRIVATE ../src)
 target_link_libraries(assistantlink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
-add_executable(voice_test voice_test.cpp ../src/voiceprotocol.cpp)
+add_executable(voice_test voice_test.cpp ../src/voiceprotocol.cpp ../src/voicecond.cpp)
 target_include_directories(voice_test PRIVATE ../src)
 target_link_libraries(voice_test PRIVATE Qt6::Core)
 
 # Voice replies recognised on the watch, with a fake asteroid-assistant, on a
 # private bus like notifications_test
-add_executable(voicelocal_test voicelocal_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp
+add_executable(voicelocal_test voicelocal_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp ../src/voicecond.cpp
 	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(voicelocal_test PRIVATE ../src)
 target_link_libraries(voicelocal_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
 # A voice reply recognised by the phone ends when the phone's link drops
-add_executable(voicelink_test voicelink_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp
+add_executable(voicelink_test voicelink_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp ../src/voicecond.cpp
 	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(voicelink_test PRIVATE ../src)
 target_link_libraries(voicelink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)

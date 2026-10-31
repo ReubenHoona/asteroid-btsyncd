@@ -28,6 +28,7 @@ set(
 	assistantprotocol.cpp
 	assistantservice.cpp
 	contactnames.cpp
+	voicecond.cpp
 )
 set(
 	HEADERS

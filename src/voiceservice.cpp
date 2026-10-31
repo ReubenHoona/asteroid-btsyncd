@@ -153,9 +153,19 @@ VoiceDBusApi::VoiceDBusApi(VoiceService *service) : QObject(service), mService(s
     connect(service, &VoiceService::partialText, this, &VoiceDBusApi::Partial);
     connect(service, &VoiceService::finalText, this, &VoiceDBusApi::Final);
     connect(service, &VoiceService::failed, this, &VoiceDBusApi::Error);
+    connect(service, &VoiceService::levelChanged, this, &VoiceDBusApi::Level);
 }
 
 uint VoiceDBusApi::Start(uint notificationId, const QString &source) { return mService->start(notificationId, source); }
+uint VoiceDBusApi::StartWith(uint notificationId, const QString &source, const QVariantMap &options)
+{
+    VoiceConditioner::Options o;
+    o.endpointMs = qBound(0, options.value(QStringLiteral("endpoint_ms"), o.endpointMs).toInt(), 10000);
+    o.maxMs = qBound(1000, options.value(QStringLiteral("max_ms"), o.maxMs).toInt(), 30000);
+    o.noSpeechMs = qBound(0, options.value(QStringLiteral("no_speech_ms"), o.noSpeechMs).toInt(), 30000);
+    o.gain = qBound(1.0, options.value(QStringLiteral("gain"), o.gain).toDouble(), 16.0);
+    return mService->start(notificationId, source, o);
+}
 bool VoiceDBusApi::Stop() { return mService->stop(); }
 bool VoiceDBusApi::Cancel() { return mService->cancel(); }
 bool VoiceDBusApi::Send() { return mService->send(); }
@@ -226,7 +236,7 @@ QString VoiceService::recognitionMode()
 {
     const QString env = qEnvironmentVariable("BTSYNCD_VOICE_RECOGNITION");
     const QString v = !env.isEmpty() ? env : MDConfItem("/org/asteroidos/voice/recognition").value().toString();
-    return v == QLatin1String("phone") || v == QLatin1String("watch") ? v : QStringLiteral("auto");
+    return v == QLatin1String("phone") || v == QLatin1String("auto") ? v : QStringLiteral("watch");
 }
 
 bool VoiceService::localWanted()
@@ -426,11 +436,12 @@ void VoiceService::failLater(const QString &code)
     QTimer::singleShot(0, this, [this, code] { emit failed(code); });
 }
 
-uint VoiceService::start(uint notificationId, const QString &source)
+uint VoiceService::start(uint notificationId, const QString &source, const VoiceConditioner::Options &options)
 {
     if (mState == Listening || mState == Recognising)
         cancel();
     mState = Idle;
+    mCondOptions = options;
 
     // "phone:...": the phone's recogniser whatever the setting
     if (source.startsWith(QLatin1String("phone:")))
@@ -488,6 +499,7 @@ uint VoiceService::startPhone(uint notificationId, const QString &source)
     mLastPartial.clear();
     mFinal.clear();
     mState = Listening;
+    mCond.reset(mCondOptions);
 
     const int phoneId = mNotifications ? mNotifications->mKnownAndroidNotifs.key(notificationId, 0) : 0;
     const QString lang = MDConfItem("/org/asteroidos/btsyncd/voice-language").value().toString();
@@ -502,12 +514,46 @@ void VoiceService::onFrame(const QByteArray &pcm)
 {
     if (mState != Listening || pcm.size() != VoiceProtocol::FramePcmBytes)
         return;
+    // the watch microphone made fit for the phone's recogniser, and its end of speech
+    QByteArray frame = pcm;
+    const VoiceConditioner::Event e = mCond.process(reinterpret_cast<qint16 *>(frame.data()), VoiceProtocol::FrameSamples);
+    if (mCond.framesSeen() % 2 == 0)
+        emit levelChanged(mCond.level());
     mPending += VoiceProtocol::adpcmFrame(mSid, mSeq++, mAdpcm,
-                                          reinterpret_cast<const qint16 *>(pcm.constData()));
+                                          reinterpret_cast<const qint16 *>(frame.constData()));
     mPendingFrames++;
     mFrames++;
     if (mPendingFrames >= framesPerNotification())
         flush();
+    if (e != VoiceConditioner::None)
+        onConditionerEvent(e);
+}
+
+void VoiceService::onConditionerEvent(VoiceConditioner::Event e)
+{
+    const int ms = mCond.framesSeen() * 20;
+    switch (e) {
+    case VoiceConditioner::SpeechStart:
+        qInfo() << "Voice: session" << mSid << "speech from" << mCond.speechStartMs() << "ms";
+        return;
+    case VoiceConditioner::EndOfSpeech:
+        qInfo() << "Voice: session" << mSid << "end of speech at" << ms << "ms (peak" << int(mCond.peakDb()) << "dBFS)";
+        break;
+    case VoiceConditioner::MaxReached:
+        qInfo() << "Voice: session" << mSid << "longest speech reached at" << ms << "ms";
+        break;
+    case VoiceConditioner::NoSpeech:
+        qInfo() << "Voice: session" << mSid << "no speech in" << ms << "ms (peak" << int(mCond.peakDb()) << "dBFS)";
+        break;
+    default:
+        return;
+    }
+    // after this frame went out: the phone closes its pipe and gives the final text
+    const quint8 sid = mSid;
+    QTimer::singleShot(0, this, [this, sid] {
+        if (sid == mSid && mState == Listening)
+            stop();
+    });
 }
 
 void VoiceService::flush()

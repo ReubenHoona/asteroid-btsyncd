@@ -24,7 +24,9 @@
 #include <QTimer>
 
 #include "service.h"
+#include "voicecond.h"
 #include "voiceprotocol.h"
+#include <QVariantMap>
 
 class NotificationService;
 class VoiceService;
@@ -70,11 +72,16 @@ private:
  *     "phone:" before any of them: the phone's recogniser whatever the
  *     setting.
  *     Where the speech is recognised: dconf /org/asteroidos/voice/recognition
- *     "auto" (the default: the phone's recogniser while the phone is
- *     connected and does voice replies, as Wear OS, else the watch's),
- *     "watch" (asteroid-assistant's Dictate, the same on-watch recogniser as
- *     the assistant; the phone's only when the watch's cannot load) or
- *     "phone" (streamed to Gadgetbridge only).
+ *     "watch" (the default: asteroid-assistant's Dictate, the same on-watch
+ *     recogniser as the assistant; the phone's only when the watch's cannot
+ *     load), "auto" (the phone's recogniser while the phone is connected and
+ *     does voice replies, else the watch's) or "phone" (streamed to
+ *     Gadgetbridge only). The default went back to "watch" after the first
+ *     real use (2026-10-31): the phone's path never ended by itself.
+ *   StartWith(u notificationId, s source, a{sv} options): as Start, with the
+ *     phone path's end of speech found on the watch (VoiceConditioner):
+ *     endpoint_ms (default 1500; 0: the user taps Done), max_ms (30000, from
+ *     the start of speech), no_speech_ms (0: wait), gain (4.0, +12 dB)
  *   Stop()   the user finished speaking: the phone gives the final text
  *   Cancel() drop the session
  *   Send()   reply to the notification with the final text (the existing
@@ -84,7 +91,8 @@ private:
  *   PhoneAvailable() a connected phone does voice replies (its recogniser
  *     can take the microphone now): asteroid-assistant's "auto" choice
  *   State()  idle | listening | recognising | done
- * Signals Partial(s text), Final(s text), Error(s code).
+ * Signals Partial(s text), Final(s text), Error(s code), Level(d level 0..1)
+ * while the phone's recogniser listens (the watch's: asteroid-assistant's Level).
  */
 class VoiceDBusApi : public QObject
 {
@@ -96,6 +104,7 @@ public:
 
 public slots:
     uint Start(uint notificationId, const QString &source);
+    uint StartWith(uint notificationId, const QString &source, const QVariantMap &options);
     bool Stop();
     bool Cancel();
     bool Send();
@@ -107,6 +116,7 @@ signals:
     void Partial(const QString &text);
     void Final(const QString &text);
     void Error(const QString &code);
+    void Level(double level);
 
 private:
     VoiceService *mService;
@@ -122,7 +132,8 @@ class VoiceService : public Service
 public:
     VoiceService(int index, QDBusConnection bus, NotificationService *notifications, QObject *parent = 0);
 
-    uint start(uint notificationId, const QString &source);
+    uint start(uint notificationId, const QString &source,
+               const VoiceConditioner::Options &options = VoiceConditioner::Options());
     bool stop();
     bool cancel();
     bool send();
@@ -139,6 +150,7 @@ signals:
     void partialText(const QString &text);
     void finalText(const QString &text);
     void failed(const QString &code);
+    void levelChanged(double level);
 
 private slots:
     void onLocalPartial(uint session, const QString &text);
@@ -164,6 +176,8 @@ private:
     static bool localWanted();
     static bool localInstalled();
     uint startPhone(uint notificationId, const QString &source);
+    // the end of speech on the phone path (an event of the conditioner)
+    void onConditionerEvent(VoiceConditioner::Event e);
     // On the watch: asteroid-assistant's Dictate, its signals relayed
     uint startLocal(uint notificationId, const QString &source);
     void endLocal();
@@ -204,6 +218,9 @@ private:
     QString mLocalSource;
     QTimer mMaxTimer;
     QTimer mResultTimer;
+    // the phone path's audio and end of speech
+    VoiceConditioner mCond;
+    VoiceConditioner::Options mCondOptions;
 };
 
 #endif // VOICESERVICE_H

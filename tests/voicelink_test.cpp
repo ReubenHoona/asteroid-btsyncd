@@ -31,6 +31,7 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QVariantMap>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 
@@ -49,8 +50,16 @@ class Collector : public QObject
 public:
     QStringList errors;
     int audio = 0;
+    int levels = 0;
+    QByteArray events;
 public slots:
     void error(const QString &c) { errors << c; }
+    void level(double) { levels++; }
+    void eventChanged(const QString &, const QVariantMap &changed, const QStringList &)
+    {
+        if (changed.contains("Value"))
+            events += changed.value("Value").toByteArray();
+    }
     void audioChanged(const QString &, const QVariantMap &changed, const QStringList &)
     {
         if (changed.contains("Value"))
@@ -102,6 +111,35 @@ static bool writeWav(const QString &path, int seconds)
         return false;
     f.write(h);
     f.write(QByteArray(int(data), '\0'));
+    return true;
+}
+
+// 16 kHz mono: room noise, 1.2 s of speech-like sound at the watch's level, then the room again
+static bool writeSpeechWav(const QString &path)
+{
+    QByteArray pcm;
+    quint32 seed = 1;
+    auto noise = [&seed] { seed = seed * 1103515245u + 12345u; return (int((seed >> 16) & 0x7fff) - 16384) / 16384.0; };
+    for (int t = 0; t < 16000 * 4; t++) {
+        double v = 1500 + 13 * noise();                         // a small DC offset and the room (-68 dBFS)
+        if (t >= 8000 && t < 8000 + 19200)
+            v += 260 * std::sin(t * 0.13) * (1 + 0.3 * noise());  // -42 dBFS speech
+        const qint16 x = qint16(v);
+        pcm.append(char(x & 0xff));
+        pcm.append(char((x >> 8) & 0xff));
+    }
+    QByteArray h("RIFF");
+    auto le32 = [&h](quint32 v) { for (int i = 0; i < 4; i++) h.append(char((v >> (8 * i)) & 0xff)); };
+    auto le16 = [&h](quint16 v) { h.append(char(v & 0xff)); h.append(char(v >> 8)); };
+    le32(36 + pcm.size());
+    h += "WAVEfmt ";
+    le32(16); le16(1); le16(1); le32(16000); le32(32000); le16(2); le16(16);
+    h += "data";
+    le32(pcm.size());
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly))
+        return false;
+    f.write(h + pcm);
     return true;
 }
 
@@ -158,6 +196,37 @@ int main(int argc, char **argv)
     CHECK(c.audio <= sent + 1);
     CHECK(!api(driver, "Available").toBool());
     CHECK(!api(driver, "PhoneAvailable").toBool());
+
+    /* The phone's path ends by itself (2026-10-31: it listened to the limit): the watch
+     * finds the end of speech and tells the phone, which then gives the final text */
+    const QString speech = dir.filePath("speech.wav");
+    CHECK(writeSpeechWav(speech));
+    CHECK(driver.connect(sessionName, BTSYNCD_VOICE_PATH, BTSYNCD_VOICE_IFACE, "Level", &c, SLOT(level(double))));
+    CHECK(driver.connect(systemName, CHR_EVENT, "org.freedesktop.DBus.Properties", "PropertiesChanged",
+                         &c, SLOT(eventChanged(QString, QVariantMap, QStringList))));
+    notifications.setLinkConnected(true);
+    CHECK(gattCall(driver, CHR_RESULT, "WriteValue", {QByteArray("<vr><st>ready</st></vr>"), options}).type()
+          == QDBusMessage::ReplyMessage);
+    CHECK(api(driver, "PhoneAvailable").toBool());
+    // the default is the watch's recogniser again: unset is "watch"
+    qunsetenv("BTSYNCD_VOICE_RECOGNITION");
+    c.events.clear();
+    QVariantMap opt;
+    opt.insert("endpoint_ms", 800);
+    opt.insert("max_ms", 8000);
+    opt.insert("no_speech_ms", 5000);
+    QElapsedTimer t;
+    t.start();
+    CHECK(api(driver, "StartWith", {0u, QStringLiteral("phone:") + speech, opt}).toUInt() != 0);
+    CHECK(waitFor([&] { return c.events.contains("<st>start</st>"); }, 2000));
+    // speech ends at 1.7 s: the end event about 0.8 s later, long before the 4 s file ends
+    CHECK(waitFor([&] { return c.events.contains("<st>end</st>"); }, 6000));
+    const qint64 endMs = t.elapsed();
+    fprintf(stderr, "voicelink_test: the watch ended the phone's session after %lld ms, %d level signals\n", endMs, c.levels);
+    CHECK(endMs > 2000 && endMs < 3700);
+    CHECK(c.levels > 20);
+    CHECK(api(driver, "State").toString() == "recognising");
+    CHECK(api(driver, "Cancel").toBool());
 
     if (failures)
         fprintf(stderr, "%d check(s) failed\n", failures);

@@ -18,11 +18,157 @@
 #include <QtMath>
 #include <cstdio>
 
+#include "voicecond.h"
+#include <random>
+
 using namespace VoiceProtocol;
 
 static int failures = 0;
 
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
+
+/* The watch microphone as stt5 measured it: 30 ms of zeros, a click, a DC offset settling
+ * over seconds, room noise; "speech" as 50 ms bursts of noise at the measured level */
+struct MicSim {
+    std::mt19937 rng{7};
+    std::normal_distribution<double> n{0.0, 1.0};
+    int t = 0;
+    double noiseDb = -68;       // the room, 25 dB under the speech
+    // one frame: speech (at speechDb) or not
+    QVector<qint16> frame(bool speech, double speechDb = -42)
+    {
+        QVector<qint16> f(FrameSamples);
+        for (int i = 0; i < FrameSamples; i++, t++) {
+            double v = 0;
+            if (t >= 480) {     // 30 ms of zeros
+                v += 6000 * std::exp(-(t - 480) / 32000.0);           // the DC offset, settling in ~2 s
+                v += 32768 * std::pow(10, noiseDb / 20) * n(rng);
+                if (speech)
+                    v += 32768 * std::pow(10, speechDb / 20) * 1.41 * std::sin(t * 0.13) * (1 + 0.5 * n(rng));
+                if (t >= 480 && t < 496)
+                    v += 30000;                                        // the click
+            }
+            f[i] = qint16(qBound(-32768.0, v, 32767.0));
+        }
+        return f;
+    }
+};
+
+static int runUntil(VoiceConditioner &c, MicSim &m, const QVector<int> &plan, VoiceConditioner::Event want, int *gotMs)
+{
+    // plan: frames of silence (negative) and speech (positive), in turn
+    int frame = 0;
+    for (int part : plan) {
+        for (int i = 0; i < qAbs(part); i++, frame++) {
+            QVector<qint16> f = m.frame(part > 0);
+            const VoiceConditioner::Event e = c.process(f.data(), f.size());
+            if (e == want) {
+                *gotMs = frame * 20;
+                return 1;
+            }
+            if (e != VoiceConditioner::None && e != VoiceConditioner::SpeechStart)
+                return 0;
+        }
+    }
+    return 0;
+}
+
+static void conditionerTests()
+{
+    VoiceConditioner::Options o;
+    o.endpointMs = 800;
+    o.maxMs = 8000;
+    o.noSpeechMs = 5000;
+    // a command: 0.6 s of room, 1.2 s of speech with a short pause, then silence
+    {
+        VoiceConditioner c;
+        c.reset(o);
+        MicSim m;
+        int at = -1;
+        CHECK(runUntil(c, m, {-30, 25, -8, 35, -100}, VoiceConditioner::EndOfSpeech, &at) == 1);
+        // the speech ends at frame 98 (1.96 s): the end 0.8 s later, not at the 8-frame pause
+        CHECK(at >= 2700 && at <= 2900);
+        CHECK(c.speechStartMs() >= 580 && c.speechStartMs() <= 720);
+        fprintf(stderr, "conditioner: speech from %d ms, end of speech at %d ms, peak %.0f dBFS\n", c.speechStartMs(), at, c.peakDb());
+    }
+    // the click and the DC offset are not speech
+    {
+        VoiceConditioner c;
+        c.reset(o);
+        MicSim m;
+        int at = -1;
+        CHECK(runUntil(c, m, {-300}, VoiceConditioner::NoSpeech, &at) == 1);
+        CHECK(c.speechStartMs() < 0);
+        CHECK(at >= 4980 && at <= 5000);
+    }
+    // talking on and on (or a noisy room that never goes quiet): ended 8 s after the start
+    {
+        VoiceConditioner c;
+        c.reset(o);
+        MicSim m;
+        int at = -1;
+        CHECK(runUntil(c, m, {-20, 600}, VoiceConditioner::MaxReached, &at) == 1);
+        CHECK(at >= 8300 && at <= 8500);
+    }
+    // the audio: the first 100 ms muted, the DC removed, +12 dB
+    {
+        VoiceConditioner c;
+        c.reset(o);
+        MicSim m;
+        double first = 0, dcLate = 0, speechRms = 0, rawRms = 0;
+        for (int i = 0; i < 150; i++) {
+            QVector<qint16> f = m.frame(i >= 100);
+            QVector<qint16> raw = f;
+            c.process(f.data(), f.size());
+            double sum = 0, mean = 0, rsum = 0, rmean = 0;
+            for (int k = 0; k < f.size(); k++) {
+                sum += double(f[k]) * f[k];
+                mean += f[k];
+                rmean += raw[k];
+            }
+            mean /= f.size();
+            rmean /= f.size();
+            for (int k = 0; k < f.size(); k++)
+                rsum += (raw[k] - rmean) * (raw[k] - rmean);
+            if (i < 5)
+                first += sum;
+            if (i >= 60 && i < 100)
+                dcLate += qAbs(mean);
+            if (i >= 110) {
+                speechRms += std::sqrt(sum / f.size());
+                rawRms += std::sqrt(rsum / f.size());
+            }
+        }
+        CHECK(first == 0);                       // the click muted
+        CHECK(dcLate / 40 < 100);                // the offset gone (it was thousands of LSB)
+        const double gainDb = 20 * std::log10(speechRms / rawRms);
+        CHECK(gainDb > 11 && gainDb < 13);       // +12 dB
+        fprintf(stderr, "conditioner: residual DC %.0f LSB, gain %.1f dB\n", dcLate / 40, gainDb);
+    }
+    // no end of speech when the user taps Done (endpoint 0), and loud speech is not clipped hard
+    {
+        VoiceConditioner::Options d;
+        d.endpointMs = 0;
+        VoiceConditioner c;
+        c.reset(d);
+        MicSim m;
+        int at = -1;
+        CHECK(runUntil(c, m, {-20, 50, -200}, VoiceConditioner::EndOfSpeech, &at) == 0);
+        VoiceConditioner l;
+        l.reset(d);
+        QVector<qint16> loud(FrameSamples);
+        int peak = 0;
+        for (int i = 0; i < 20; i++) {
+            for (int k = 0; k < FrameSamples; k++)
+                loud[k] = qint16(20000 * std::sin((i * FrameSamples + k) * 0.1));
+            l.process(loud.data(), loud.size());
+            for (int k = 0; k < FrameSamples; k++)
+                peak = qMax(peak, qAbs(int(loud[k])));
+        }
+        CHECK(peak <= 32767 && peak > 24576);
+    }
+}
+
 
 static double snrDb(const qint16 *a, const qint16 *b, int n)
 {
@@ -243,6 +389,7 @@ static int checkStream(const QString &hexPath, const QString &wavPath)
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    conditionerTests();
     const QStringList args = app.arguments().mid(1);
     if (args.value(0) == "--vector") {
         printVector();
