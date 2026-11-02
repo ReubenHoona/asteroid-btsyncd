@@ -23,6 +23,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(AmberMpris ambermpris6 REQUIRED IMPORTED_TARGET)
 pkg_check_modules(MLITE mlite6 REQUIRED IMPORTED_TARGET)
 pkg_check_modules(KEEPALIVE keepalive REQUIRED IMPORTED_TARGET)
+# sensorlogd's heart rate readings (heartrate.db) for the health sync
+pkg_check_modules(SQLITE3 sqlite3 REQUIRED IMPORTED_TARGET)
 pkg_check_modules(PulseSimple libpulse-simple IMPORTED_TARGET)
 pkg_check_modules(MKCAL libmkcal-qt6 IMPORTED_TARGET)
 pkg_check_modules(KCALCORE KF6CalendarCore IMPORTED_TARGET)

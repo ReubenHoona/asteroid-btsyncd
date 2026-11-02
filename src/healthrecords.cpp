@@ -21,9 +21,15 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QSet>
 #include <QStringList>
+#include <QTimeZone>
+#include <QVector>
+
+#include <sqlite3.h>
 
 #include <algorithm>
+#include <climits>
 
 namespace HealthRecords {
 
@@ -38,6 +44,140 @@ struct Entry {
 QString sensorDir(Type type)
 {
     return type == HeartRate ? QStringLiteral("heartrateMonitor") : QStringLiteral("stepCounter");
+}
+
+/*
+ * sensorlogd's heartrate.db, for reading. Opened read-write, though only
+ * read: a WAL database is read through its -shm file, which a read-only
+ * connection cannot make when sensorlogd has none open. Not there (a watch
+ * from before it, or sensorlogd has not run yet): no readings.
+ */
+class ReadingsDb
+{
+public:
+    explicit ReadingsDb(const QString &root)
+    {
+        const QString path = root + QStringLiteral("heartrate.db");
+        if (!QFile::exists(path))
+            return;
+        if (sqlite3_open_v2(QFile::encodeName(path).constData(), &m_db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
+            sqlite3_close(m_db);
+            m_db = nullptr;
+            return;
+        }
+        sqlite3_busy_timeout(m_db, 2000); // a checkpoint of sensorlogd's
+    }
+    ~ReadingsDb()
+    {
+        sqlite3_finalize(m_stmt);
+        sqlite3_close(m_db);
+    }
+    ReadingsDb(const ReadingsDb &) = delete;
+    ReadingsDb &operator=(const ReadingsDb &) = delete;
+
+    // a statement to step through; nullptr without a database (or its table)
+    sqlite3_stmt *prepare(const char *sql)
+    {
+        sqlite3_finalize(m_stmt);
+        m_stmt = nullptr;
+        if (m_db && sqlite3_prepare_v2(m_db, sql, -1, &m_stmt, nullptr) != SQLITE_OK) {
+            sqlite3_finalize(m_stmt);
+            m_stmt = nullptr;
+        }
+        return m_stmt;
+    }
+
+private:
+    sqlite3 *m_db = nullptr;
+    sqlite3_stmt *m_stmt = nullptr;
+};
+
+bool plausibleBpm(qint64 bpm)
+{
+    return bpm > 0 && bpm < 300;
+}
+
+/*
+ * The minutes of the database's readings from since's minute on, before
+ * until (epoch seconds; LLONG_MAX: no end): the median usable reading of
+ * each minute after since, dated by the minute's start, and every minute
+ * that has a reading at all (covered: the heartrateMonitor records of
+ * those minutes are not sent). Stops once more than max minutes have a
+ * median; end is then the first minute not read, all before it were.
+ */
+struct DbMinutes {
+    bool found = false;     // there is a database to read
+    QList<Entry> medians;
+    QSet<qint64> covered;   // epoch minutes (seconds / 60)
+    qint64 end = LLONG_MAX; // epoch seconds
+};
+
+DbMinutes readMinutes(const QString &root, qint64 since, qint64 until, int max, int minAccuracy)
+{
+    DbMinutes out;
+    ReadingsDb db(root);
+    sqlite3_stmt *st = db.prepare("SELECT time, bpm, accuracy FROM heartrate WHERE time >= ? AND time < ? ORDER BY time");
+    if (!st)
+        return out;
+    out.found = true;
+    const qint64 from = qMax<qint64>(since, 0) / 60 * 60;
+    sqlite3_bind_int64(st, 1, from * 1000);
+    sqlite3_bind_int64(st, 2, until >= LLONG_MAX / 1000 ? LLONG_MAX : until * 1000);
+
+    qint64 minute = -1;
+    QVector<int> bpms;
+    auto finish = [&]() {
+        if (!bpms.isEmpty() && minute * 60 > since) {
+            // the median (of an even count, the upper one), as sensorlogd's records
+            std::sort(bpms.begin(), bpms.end());
+            out.medians.append({minute * 60, bpms.at(bpms.size() / 2), minute * 60});
+        }
+        bpms.clear();
+    };
+    bool stopped = false;
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        const qint64 m = sqlite3_column_int64(st, 0) / 60000;
+        if (m != minute) {
+            finish();
+            if (out.medians.size() > max) {
+                out.end = m * 60;
+                stopped = true;
+                break;
+            }
+            minute = m;
+            out.covered.insert(m);
+        }
+        const qint64 bpm = sqlite3_column_int64(st, 1);
+        if (sqlite3_column_int(st, 2) >= minAccuracy && plausibleBpm(bpm))
+            bpms.append((int)bpm);
+    }
+    if (!stopped)
+        finish();
+    return out;
+}
+
+// hrr: the usable readings after since (epoch ms), at most max; more if there are others
+Page queryReadings(const QString &root, qint64 since, int max, int minAccuracy)
+{
+    Page page;
+    ReadingsDb db(root);
+    sqlite3_stmt *st = db.prepare("SELECT time, bpm FROM heartrate WHERE time > ? AND accuracy >= ? "
+                                  "AND bpm > 0 AND bpm < 300 ORDER BY time LIMIT ?");
+    if (!st)
+        return page;
+    sqlite3_bind_int64(st, 1, since);
+    sqlite3_bind_int(st, 2, minAccuracy);
+    sqlite3_bind_int(st, 3, max + 1);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        if (page.records.size() == max) {
+            page.more = true; // the times are the table's key: no two readings share one
+            break;
+        }
+        page.records.append({sqlite3_column_int64(st, 0), sqlite3_column_int64(st, 1)});
+    }
+    if (!page.records.isEmpty())
+        page.t0 = page.records.first().time;
+    return page;
 }
 
 /*
@@ -86,6 +226,8 @@ Type typeFromName(const QString &name)
         return HeartRate;
     if (name == QLatin1String("steps"))
         return Steps;
+    if (name == QLatin1String("hrr"))
+        return HeartRateReadings;
     return Unknown;
 }
 
@@ -94,17 +236,20 @@ QString typeName(Type type)
     switch (type) {
     case HeartRate: return QStringLiteral("hr");
     case Steps:     return QStringLiteral("steps");
+    case HeartRateReadings: return QStringLiteral("hrr");
     default:        return QString();
     }
 }
 
-Page query(const QString &root, Type type, qint64 since, int max)
+Page query(const QString &root, Type type, qint64 since, int max, int minAccuracy)
 {
     Page page;
     if (type == Unknown)
         return page;
     if (max <= 0 || max > MaxRecords)
         max = MaxRecords;
+    if (type == HeartRateReadings)
+        return queryReadings(root, since, max, minAccuracy);
 
     // The day before since's too: its 23:59:59 record, or a time zone change
     const QDate first = QDateTime::fromSecsSinceEpoch(qMax<qint64>(since, 0)).date().addDays(-1);
@@ -138,6 +283,27 @@ Page query(const QString &root, Type type, qint64 since, int max)
             lastDate = date.addDays(2);
     }
 
+    if (type == HeartRate) {
+        // Every minute with readings in the database is sent as their
+        // median; a heartrateMonitor record only for a minute without any
+        // (history from before the database, a gap in it). Times before
+        // end are complete: the database stopped there, or the day files
+        // after lastDate (times from the UTC start of lastDate + 1, - 14 h,
+        // on) were not read.
+        const qint64 horizon = skipped
+                ? lastDate.addDays(1).startOfDay(QTimeZone::UTC).toSecsSinceEpoch() - 14 * 3600 : LLONG_MAX;
+        const DbMinutes minutes = readMinutes(root, since, horizon, max, minAccuracy);
+        if (minutes.found) {
+            const qint64 end = qMin(horizon, minutes.end);
+            entries.removeIf([&minutes, end](const Entry &e) {
+                return e.time >= end || minutes.covered.contains(e.time / 60);
+            });
+            entries += minutes.medians;
+            if (end < LLONG_MAX)
+                skipped = true;
+        }
+    }
+
     entries.removeIf([since](const Entry &e) { return e.time <= since; });
     std::stable_sort(entries.begin(), entries.end(),
                      [](const Entry &a, const Entry &b) { return a.time < b.time; });
@@ -148,7 +314,8 @@ Page query(const QString &root, Type type, qint64 since, int max)
     while (n < entries.size() && (n < max || entries[n].time == entries[n - 1].time))
         n++;
 
-    page.more = n < entries.size() || skipped;
+    // (never more after none: the phone takes that for a broken answer)
+    page.more = n > 0 && (n < entries.size() || skipped);
     if (n > 0)
         page.t0 = type == Steps ? entries[0].start : entries[0].time;
     for (qsizetype i = 0; i < n; i++)

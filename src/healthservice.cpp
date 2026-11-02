@@ -28,9 +28,10 @@
 #include <QTimer>
 #include <QXmlStreamReader>
 
-// What this watch can send, for the capabilities characteristic
+// What this watch can send, for the capabilities characteristic (version 2:
+// hrr, every heart rate reading; hr one median per minute of them)
 static const char HEALTH_CAPABILITIES[] =
-    "<health><version>1</version><types>hr,steps</types><mx>1000</mx></health>";
+    "<health><version>2</version><types>hr,steps,hrr</types><mx>1000</mx></health>";
 
 // Requests are a few dozen bytes; anything longer without </req> is junk
 static const int MaxRequestSize = 1024;
@@ -53,6 +54,14 @@ static QString dataRoot()
     if (!root.endsWith('/'))
         root += '/';
     return root;
+}
+
+// The heart rate readings sent: those sensorlogd's own records use
+// (heartrateSensor/minStatus, QHrmSensor::Status; default medium and up)
+static int minAccuracy()
+{
+    QSettings settings("asteroid", "sensorlogd");
+    return qBound(1, settings.value("heartrateSensor/minStatus", HealthRecords::DefaultMinAccuracy).toInt(), 4);
 }
 
 /*
@@ -183,7 +192,7 @@ void HealthService::request(const QString &type, qint64 since, int max, int mtu)
         if (t == HealthRecords::Unknown) {
             mPending = HealthRecords::errorXml(type, QStringLiteral("type"));
         } else {
-            const HealthRecords::Page page = HealthRecords::query(dataRoot(), t, since, max);
+            const HealthRecords::Page page = HealthRecords::query(dataRoot(), t, since, max, minAccuracy());
             mPending = HealthRecords::toXml(t, page);
             qDebug() << "Health request" << type << "since" << since << ":" << page.records.size()
                      << "records," << mPending.size() << "bytes" << (page.more ? "(more)" : "");

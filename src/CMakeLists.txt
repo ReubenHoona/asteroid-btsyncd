@@ -73,6 +73,7 @@ target_link_libraries(
 		PkgConfig::AmberMpris
 		PkgConfig::MLITE
 		PkgConfig::KEEPALIVE
+		PkgConfig::SQLITE3
 )
 
 # The phone's calendar goes to mkcal (without it there is no calendar service)

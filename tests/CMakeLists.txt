@@ -3,7 +3,7 @@
 # build script.
 add_executable(healthrecords_test healthrecords_test.cpp ../src/healthrecords.cpp)
 target_include_directories(healthrecords_test PRIVATE ../src)
-target_link_libraries(healthrecords_test PRIVATE Qt6::Core)
+target_link_libraries(healthrecords_test PRIVATE Qt6::Core PkgConfig::SQLITE3)
 
 # The assistant relay's XML
 add_executable(assistant_test assistant_test.cpp ../src/assistantprotocol.cpp ../src/contactnames.cpp)

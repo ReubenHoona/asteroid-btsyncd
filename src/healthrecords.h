@@ -23,28 +23,40 @@
 #include <QString>
 
 /*
- * The health history asteroid-sensorlogd keeps: one file per sensor and
- * (local) day, <root>/<sensor>/<yyyy-MM-dd>.log, one "epochSeconds:value"
- * line per record, appended in time order.
+ * The health history asteroid-sensorlogd keeps under <root>:
  *
- * - hr (heartrateMonitor): beats per minute, dated by the minute it was
- *   measured in (continuous mode) or by the reading (interval mode).
- * - steps (stepCounter): steps so far that day; a 23:59:59 record closes
- *   the day. Sent as the steps taken since the record before (deltas).
+ * - heartrate.db: every heart rate reading, an SQLite table (WAL; read
+ *   while sensorlogd writes) heartrate (time INTEGER PRIMARY KEY, bpm,
+ *   accuracy), time in epoch milliseconds, accuracy QHrmSensor::Status
+ *   (1 unreliable .. 4 high).
+ * - One file per sensor and (local) day, <root>/<sensor>/<yyyy-MM-dd>.log,
+ *   one "epochSeconds:value" line per record, appended in time order:
+ *   heartrateMonitor, one median reading per interval (1 or 10 min);
+ *   stepCounter, the steps so far that day, a 23:59:59 record closing it.
+ *
+ * Sent as:
+ * - hr: one record per minute, dated by the minute's start: the median of
+ *   the minute's usable readings in heartrate.db. For a minute without
+ *   readings there (history from before the database, a gap in it), the
+ *   heartrateMonitor records, dated by their reading.
+ * - hrr: every usable reading in heartrate.db; times in milliseconds.
+ * - steps: the steps taken since the record before (deltas).
+ * Usable: accuracy at least sensorlogd's heartrateSensor/minStatus, the
+ * readings sensorlogd's own records use.
  */
 namespace HealthRecords {
 
-enum Type { Unknown, HeartRate, Steps };
+enum Type { Unknown, HeartRate, Steps, HeartRateReadings };
 
 struct Record {
-    qint64 time;    // epoch seconds
+    qint64 time;    // epoch seconds (hrr: milliseconds)
     qint64 value;   // bpm, or steps since the record before
 };
 
 struct Page {
     QList<Record> records;
-    // hr: the first record's time. steps: when the first record's interval
-    // began (the record before it that day, or the day's local midnight)
+    // hr, hrr: the first record's time. steps: when the first record's
+    // interval began (the record before it that day, or the day's local midnight)
     qint64 t0 = 0;
     bool more = false;  // records after these: ask again from the last one
 };
@@ -52,12 +64,16 @@ struct Page {
 // Most records in one answer (a client may ask for fewer)
 const int MaxRecords = 1000;
 
+// sensorlogd's default for heartrateSensor/minStatus: medium and up
+const int DefaultMinAccuracy = 3;
+
 Type typeFromName(const QString &name);
 QString typeName(Type type);
 
-// Records of the type after since (exclusive), oldest first, at most max;
-// never splits records with the same time over two pages
-Page query(const QString &root, Type type, qint64 since, int max = MaxRecords);
+// Records of the type after since (exclusive; hrr: milliseconds), oldest
+// first, at most max; never splits records with the same time over two pages
+Page query(const QString &root, Type type, qint64 since, int max = MaxRecords,
+           int minAccuracy = DefaultMinAccuracy);
 
 // <data><ty>..</ty><t0>..</t0><n>..</n><mo>..</mo><r>dt,v;dt,v</r></data>
 QByteArray toXml(Type type, const Page &page);

@@ -55,7 +55,7 @@ private:
 /*
  * Heart rate and step history from asteroid-sensorlogd (see
  * PROTOCOL-health-sync.md). The phone writes
- *   <req><ty>hr|steps</ty><si>SINCE</si><mx>MAX</mx></req>
+ *   <req><ty>hr|steps|hrr</ty><si>SINCE</si><mx>MAX</mx></req>
  * and gets the records after SINCE on the data characteristic.
  */
 class HealthService : public Service
