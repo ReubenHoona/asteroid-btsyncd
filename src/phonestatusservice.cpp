@@ -116,17 +116,19 @@ PhoneDBusApi::PhoneDBusApi(PhoneStatusService *service) : QObject(service), mSer
     connect(service, &PhoneStatusService::connectedChanged, this, &PhoneDBusApi::ConnectedChanged);
     connect(service, &PhoneStatusService::batteryChanged, this, &PhoneDBusApi::BatteryChanged);
     connect(service, &PhoneStatusService::doNotDisturbChanged, this, &PhoneDBusApi::DoNotDisturbChanged);
+    connect(service, &PhoneStatusService::bedtimeChanged, this, &PhoneDBusApi::BedtimeChanged);
 }
 
 bool PhoneDBusApi::Connected() { return mService->connected(); }
 int PhoneDBusApi::BatteryLevel() { return mService->batteryLevel(); }
 bool PhoneDBusApi::Charging() { return mService->charging(); }
 bool PhoneDBusApi::DoNotDisturb() { return mService->doNotDisturb(); }
+bool PhoneDBusApi::Bedtime() { return mService->bedtime(); }
 bool PhoneDBusApi::SetDoNotDisturb(bool on) { return mService->setDoNotDisturb(on); }
 
 QByteArray PhoneStatusService::capabilities()
 {
-    return QByteArrayLiteral("<capabilities><version>1</version><battery>1</battery><dnd>1</dnd></capabilities>");
+    return QByteArrayLiteral("<capabilities><version>2</version><battery>1</battery><dnd>1</dnd><bedtime>1</bedtime></capabilities>");
 }
 
 PhoneStatusService::PhoneStatusService(int index, QDBusConnection bus, NotificationService *notifications, QObject *parent)
@@ -139,14 +141,32 @@ PhoneStatusService::PhoneStatusService(int index, QDBusConnection bus, Notificat
 
     // A phone that listens again gets what the user chose meanwhile
     connect(mRequests, &PhoneRequestsChrc::notifyingChanged, this, [this](bool notifying) {
-        if(notifying && mDndPending)
+        if(notifying && mDndPending) {
+            mDndPendingSince = QDateTime::currentMSecsSinceEpoch();
             sendDndRequest();
+        }
     });
 
     mDndConf = new MDConfItem(DndKey, this);
     mDnd = mDndConf->value(false).toBool();
-    mNotifications->setDoNotDisturb(mDnd);
     connect(mDndConf, &MDConfItem::valueChanged, this, &PhoneStatusService::dndConfChanged);
+    mBedtimeConf = new MDConfItem(BedtimeKey, this);
+    mBedtime = mBedtimeConf->value(false).toBool();
+    mTheaterConf = new MDConfItem(TheaterKey, this);
+    connect(mBedtimeConf, &MDConfItem::valueChanged, this, &PhoneStatusService::modeConfChanged);
+    connect(mTheaterConf, &MDConfItem::valueChanged, this, &PhoneStatusService::modeConfChanged);
+    updateSilence();
+    mSettleTimer = new QTimer(this);
+    mSettleTimer->setSingleShot(true);
+    mSettleTimer->setInterval(QuietSettleMs);
+    connect(mSettleTimer, &QTimer::timeout, this, [this] {
+        if(!mDndPending)
+            return;
+        if(mPhoneQuiet == int(quiet()))
+            mDndPending = false;
+        else
+            sendDndRequest();
+    });
 
     mNoticeTimer = new QTimer(this);
     mNoticeTimer->setSingleShot(true);
@@ -186,7 +206,7 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
         return;
     int level = mBatteryLevel;
     bool charging = mCharging;
-    QString dnd;
+    QString dnd, bed;
     while(reader.readNextStartElement()) {
         const auto name = reader.name();
         const QString text = reader.readElementText().trimmed();
@@ -203,6 +223,8 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
             charging = text == "1";
         } else if(name == QLatin1String("dnd")) {
             dnd = text;
+        } else if(name == QLatin1String("bed")) {
+            bed = text;
         }
     }
     if(level != mBatteryLevel || charging != mCharging) {
@@ -211,20 +233,42 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
         qInfo() << "Phone battery:" << level << "%" << (charging ? "charging" : "");
         emit batteryChanged(level, charging);
     }
+    if(bed == QLatin1String("on") || bed == QLatin1String("off")) {
+        const bool on = bed == QLatin1String("on");
+        if(phoneMayChange(on) && on != mBedtime) {
+            qInfo() << "Bedtime from the phone:" << bed;
+            setBedtime(on, true);
+        }
+    }
     if(!dnd.isEmpty()) {
         const bool on = dnd != QLatin1String("off");
-        if(mDndPending) {
-            // The watch's choice is on its way to the phone (or waits for
-            // it): the phone's earlier state does not undo it
-            if(on == mDnd || QDateTime::currentMSecsSinceEpoch() - mDndPendingSince > DndPendingMs)
-                mDndPending = false;
-            else
-                return;
-        }
-        if(on != mDnd)
+        mPhoneQuiet = on ? 1 : 0;
+        if(!phoneMayChange(on))
+            return;
+        if(on && !quiet()) {
             qInfo() << "Do Not Disturb from the phone:" << dnd;
-        setDnd(on, true);
+            setDnd(true, true);
+        } else if(!on && quiet()) {
+            // the phone's quiet ended: the watch's too, DND or Bedtime
+            qInfo() << "Do Not Disturb from the phone: off" << (mBedtime ? "(bedtime off)" : "");
+            setDnd(false, true);
+            setBedtime(false, true);
+        }
     }
+}
+
+bool PhoneStatusService::phoneMayChange(bool phoneQuiet)
+{
+    if(!mDndPending)
+        return true;
+    // The watch's choice is on its way to the phone (or waits for it): the
+    // phone's earlier state does not undo it
+    if(phoneQuiet == quiet() || QDateTime::currentMSecsSinceEpoch() - mDndPendingSince > DndPendingMs) {
+        mDndPending = false;
+        mSettleTimer->stop();
+        return true;
+    }
+    return false;
 }
 
 bool PhoneStatusService::setDoNotDisturb(bool on)
@@ -239,21 +283,60 @@ void PhoneStatusService::dndConfChanged()
     setDnd(mDndConf->value(false).toBool(), false);
 }
 
+void PhoneStatusService::modeConfChanged()
+{
+    // Bedtime from the quick panel, Settings or the modes engine (Do Not
+    // Disturb on ends it); Theater only silences
+    setBedtime(mBedtimeConf->value(false).toBool(), false);
+    updateSilence();
+}
+
+void PhoneStatusService::updateSilence()
+{
+    mNotifications->setDoNotDisturb(mDnd);
+    mNotifications->setModeQuiet(mBedtime || mTheaterConf->value(false).toBool());
+}
+
 void PhoneStatusService::setDnd(bool on, bool fromPhone)
 {
     if(on == mDnd)
         return;
+    const bool wasQuiet = quiet();
     mDnd = on;
-    mNotifications->setDoNotDisturb(on);
+    updateSilence();
     if(mDndConf->value(false).toBool() != on)
         mDndConf->set(on);
     emit doNotDisturbChanged(on);
-    if(fromPhone)
+    if(!fromPhone)
+        qInfo() << "Do Not Disturb on the watch:" << (on ? "on" : "off");
+    quietChanged(wasQuiet, fromPhone);
+}
+
+void PhoneStatusService::setBedtime(bool on, bool fromPhone)
+{
+    if(on == mBedtime)
         return;
-    qInfo() << "Do Not Disturb on the watch:" << (on ? "on" : "off");
+    const bool wasQuiet = quiet();
+    mBedtime = on;
+    updateSilence();
+    if(mBedtimeConf->value(false).toBool() != on)
+        mBedtimeConf->set(on);
+    emit bedtimeChanged(on);
+    if(!fromPhone)
+        qInfo() << "Bedtime on the watch:" << (on ? "on" : "off");
+    quietChanged(wasQuiet, fromPhone);
+}
+
+void PhoneStatusService::quietChanged(bool wasQuiet, bool fromPhone)
+{
+    // from the phone: it has it already
+    if(fromPhone || quiet() == wasQuiet)
+        return;
+    // sent once the dconf writes settle (Do Not Disturb to Bedtime and back
+    // is no change for the phone), pending until the phone follows
     mDndPending = true;
     mDndPendingSince = QDateTime::currentMSecsSinceEpoch();
-    sendDndRequest();
+    mSettleTimer->start();
 }
 
 bool PhoneStatusService::sendDndRequest()
@@ -263,7 +346,8 @@ bool PhoneStatusService::sendDndRequest()
     if(!connected() || !mRequests->notifying())
         return false;
     mDndPendingSince = QDateTime::currentMSecsSinceEpoch();
-    mRequests->send(mDnd ? QByteArrayLiteral("<req><dnd>on</dnd></req>") : QByteArrayLiteral("<req><dnd>off</dnd></req>"));
+    mRequests->send(quiet() ? QByteArrayLiteral("<req><dnd>on</dnd></req>") : QByteArrayLiteral("<req><dnd>off</dnd></req>"));
+    mPhoneQuiet = int(quiet());
     return true;
 }
 
@@ -276,7 +360,10 @@ void PhoneStatusService::phoneConnectedChanged(bool connected)
         mNoticeTimer->stop();
         closeDisconnectNotice();
         // Back with the subscription BlueZ kept: the watch's choice, once the
-        // phone has set itself up again
+        // phone has set itself up again (its older state, sent first, does
+        // not undo it: the window starts now)
+        if(mDndPending)
+            mDndPendingSince = QDateTime::currentMSecsSinceEpoch();
         if(mDndPending)
             QTimer::singleShot(NotificationService::PhoneSetupMs, this, [this] {
                 if(mDndPending)

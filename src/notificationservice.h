@@ -284,6 +284,11 @@ public:
     // but alarms and the find-my-watch alert
     void setDoNotDisturb(bool on) { mDoNotDisturb = on; }
     bool doNotDisturb() const { return mDoNotDisturb; }
+    // Bedtime or Theater mode (/org/asteroidos/modes/bedtime, theater, the
+    // launcher's modes engine): phone notifications as quiet as with DND,
+    // as stock (alarms and the find-my-watch alert still come through)
+    void setModeQuiet(bool on) { mModeQuiet = on; }
+    bool modeQuiet() const { return mModeQuiet; }
 
     // The protocol version 4 app icon cache (~/.cache/asteroid-btsyncd/icons):
     // its token changes when it starts empty, so the phone sends its icons again
@@ -428,6 +433,7 @@ private:
     bool mPhoneConnected = false;
     int mMtu = 23;
     bool mDoNotDisturb = false;
+    bool mModeQuiet = false;
 
     // Version 4: the card of each conversation (thread key -> lipstick id,
     // and back), and what each card shows (to alert only for new content)

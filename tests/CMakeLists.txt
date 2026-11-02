@@ -55,6 +55,14 @@ add_executable(phonestatus_test phonestatus_test.cpp ../src/phonestatusservice.c
 target_include_directories(phonestatus_test PRIVATE ../src)
 target_link_libraries(phonestatus_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
+# The modes on the phone status service: Bedtime with the phone's Do Not
+# Disturb both ways, Bedtime and Theater silencing phone notifications, on a
+# private bus like notifications_test (with a dconf database of its own)
+add_executable(modes_test modes_test.cpp ../src/phonestatusservice.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(modes_test PRIVATE ../src)
+target_link_libraries(modes_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
 # The battery service (the level and whether it charges, from a fake mce) on a
 # private bus like notifications_test
 add_executable(battery_test battery_test.cpp ../src/batteryservice.cpp ../src/batterystatus.cpp

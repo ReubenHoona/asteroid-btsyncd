@@ -160,7 +160,7 @@ int main(int argc, char **argv)
 
     {
         const QDBusMessage r = gattCall(driver, CHR_PCAPS, "ReadValue", {QVariantMap()});
-        CHECK(r.arguments().value(0).toByteArray() == "<capabilities><version>1</version><battery>1</battery><dnd>1</dnd></capabilities>");
+        CHECK(r.arguments().value(0).toByteArray() == "<capabilities><version>2</version><battery>1</battery><dnd>1</dnd><bedtime>1</bedtime></capabilities>");
     }
     CHECK(api(driver, "BatteryLevel").toInt() == -1);
     CHECK(api(driver, "Connected").toBool() == false);

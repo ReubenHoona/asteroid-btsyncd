@@ -1350,7 +1350,7 @@ void NotificationService::post(const PhoneNotification &n)
     const QString shownBody = n.shownBody();
     const uint content = contentHash(n.summary, shownBody);
     const bool contentChanged = !replacesId || mContent.value(replacesId) != content;
-    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb, quietOnCharger());
+    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb || mModeQuiet, quietOnCharger());
     // The update that brings the watch's own reply: in place, quietly
     if(replacesId && mRepliedAt.contains(replacesId)) {
         const qint64 repliedAt = mRepliedAt.take(replacesId);
