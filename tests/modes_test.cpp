@@ -6,7 +6,8 @@
  *   - the watch's Bedtime goes to the phone as its Do Not Disturb; the
  *     switch between DND and Bedtime (the launcher's modes engine: the new
  *     one on first, then the other off) sends nothing
- *   - the phone's DND on: a watch in Bedtime stays in Bedtime; its DND off
+ *   - the phone's DND on: a watch not quiet goes to Bedtime (or DND with
+ *     phone-dnd-bedtime false); a watch in Bedtime stays in Bedtime; its DND off
  *     ends the watch's Bedtime; <bed> from a phone that can tell
  *   - Bedtime and Theater silence phone notifications as DND does; alarms
  *     come through
@@ -222,12 +223,34 @@ int main(int argc, char **argv)
     spin(PhoneStatusService::QuietSettleMs + 300);
     CHECK(collector.requests.isEmpty());
 
-    // The phone's DND comes on: the watch's DND (not Bedtime)
+    // The phone's DND comes on (its Bedtime schedule): the watch's Bedtime,
+    // a message does not alert, and nothing goes back
+    collector.requests.clear();
+    write(driver, CHR_STATUS, "<ps><dnd>priority</dnd></ps>");
+    CHECK(waitFor([&] { return bedtimeKey->value(false).toBool(); }));
+    CHECK(phone.bedtime() && !phone.doNotDisturb() && !dndKey->value(false).toBool());
+    CHECK(notifications.modeQuiet());
+    CHECK(!notifyAlerts(driver, fake, 40, "normal"));
+    spin(PhoneStatusService::QuietSettleMs + 300);
+    CHECK(collector.requests.isEmpty());
+    // ...its DND off in the morning: the watch's Bedtime ends
+    write(driver, CHR_STATUS, "<ps><dnd>off</dnd></ps>");
+    CHECK(waitFor([&] { return !bedtimeKey->value(false).toBool(); }));
+    CHECK(!phone.quiet());
+
+    // With phone-dnd-bedtime off, the phone's DND is the watch's DND (stock)
+    MDConfItem phoneDndBedtime(PhoneStatusService::PhoneDndBedtimeKey);
+    phoneDndBedtime.set(false);
+    phoneDndBedtime.sync();
+    spin(100);
     write(driver, CHR_STATUS, "<ps><dnd>alarms</dnd></ps>");
     CHECK(waitFor([&] { return dndKey->value(false).toBool(); }));
     CHECK(!phone.bedtime());
     write(driver, CHR_STATUS, "<ps><dnd>off</dnd></ps>");
     CHECK(waitFor([&] { return !dndKey->value(false).toBool(); }));
+    phoneDndBedtime.unset();
+    phoneDndBedtime.sync();
+    spin(100);
 
     // A phone that can tell its Bedtime: <bed> sets the watch's, nothing back
     write(driver, CHR_STATUS, "<ps><v>5</v><bed>on</bed><dnd>priority</dnd></ps>");

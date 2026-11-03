@@ -153,6 +153,7 @@ PhoneStatusService::PhoneStatusService(int index, QDBusConnection bus, Notificat
     mBedtimeConf = new MDConfItem(BedtimeKey, this);
     mBedtime = mBedtimeConf->value(false).toBool();
     mTheaterConf = new MDConfItem(TheaterKey, this);
+    mPhoneDndBedtimeConf = new MDConfItem(PhoneDndBedtimeKey, this);
     connect(mBedtimeConf, &MDConfItem::valueChanged, this, &PhoneStatusService::modeConfChanged);
     connect(mTheaterConf, &MDConfItem::valueChanged, this, &PhoneStatusService::modeConfChanged);
     updateSilence();
@@ -246,8 +247,13 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
         if(!phoneMayChange(on))
             return;
         if(on && !quiet()) {
-            qInfo() << "Do Not Disturb from the phone:" << dnd;
-            setDnd(true, true);
+            if(mPhoneDndBedtimeConf->value(true).toBool()) {
+                qInfo() << "Do Not Disturb from the phone:" << dnd << "(Bedtime on the watch)";
+                setBedtime(true, true);
+            } else {
+                qInfo() << "Do Not Disturb from the phone:" << dnd;
+                setDnd(true, true);
+            }
         } else if(!on && quiet()) {
             // the phone's quiet ended: the watch's too, DND or Bedtime
             qInfo() << "Do Not Disturb from the phone: off" << (mBedtime ? "(bedtime off)" : "");

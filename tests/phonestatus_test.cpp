@@ -3,7 +3,9 @@
  * (cmake -DBTSYNCD_TESTS=ON), run like notifications_test:
  *   dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS phonestatus_test'
  *   - capabilities
- *   - the phone's battery and DND (split writes) -> session API and signals;
+ *   - the phone's battery and DND (split writes) -> session API and signals
+ *     (phone-dnd-bedtime off: the phone's DND is the watch's DND, as stock;
+ *     the default, Bedtime, is in modes_test);
  *     the notification service follows the DND
  *   - the watch's DND to the phone; switched while no phone listened: sent
  *     when it listens again, and the phone's older state does not undo it
@@ -18,6 +20,7 @@
 #include "notificationservice.h"
 #include "common.h"
 
+#include <MDConfItem>
 #include <QCoreApplication>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -140,6 +143,10 @@ int main(int argc, char **argv)
     QDBusConnection fakeConn = QDBusConnection::connectToBus(QDBusConnection::SessionBus, "fake-lipstick");
     CHECK(fakeConn.registerObject("/org/freedesktop/Notifications", &fake, QDBusConnection::ExportAllSlots));
     CHECK(fakeConn.registerService("org.freedesktop.Notifications"));
+
+    MDConfItem phoneDndBedtime(PhoneStatusService::PhoneDndBedtimeKey);
+    phoneDndBedtime.set(false);
+    phoneDndBedtime.sync();
 
     NotificationService notifications(0, QDBusConnection::systemBus());
     PhoneStatusService phone(9, QDBusConnection::systemBus(), &notifications);

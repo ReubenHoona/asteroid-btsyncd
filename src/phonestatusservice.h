@@ -52,7 +52,11 @@ class QTimer;
  *   - the watch going quiet or not goes to the phone as <dnd>on|off</dnd>
  *     (Gadgetbridge 44 and older already set the phone's DND from it; the
  *     switch between DND and Bedtime on the watch sends nothing);
- *   - the phone's DND coming on makes a watch that is not quiet DND; a
+ *   - the phone's DND coming on makes a watch that is not quiet Bedtime
+ *     (user, 2026-11-03: the phone's DND comes from its Bedtime schedule,
+ *     which Android lets no app read, and the watch should then light up
+ *     for nothing but its button), or DND with
+ *     /org/asteroidos/modes/phone-dnd-bedtime false (stock's mapping); a
  *     watch in Bedtime stays in Bedtime;
  *   - the phone's DND going off ends the watch's DND or Bedtime.
  * Changed while no phone listened: the watch's choice goes to the phone
@@ -130,6 +134,8 @@ public:
     static constexpr const char *DndKey = "/org/asteroidos/notifications/do-not-disturb";
     static constexpr const char *BedtimeKey = "/org/asteroidos/modes/bedtime";
     static constexpr const char *TheaterKey = "/org/asteroidos/modes/theater";
+    // the phone's DND starts the watch's Bedtime (default) or its DND
+    static constexpr const char *PhoneDndBedtimeKey = "/org/asteroidos/modes/phone-dnd-bedtime";
     // the watch's changes are sent once they settle (the switch between
     // DND and Bedtime is two dconf writes)
     static const int QuietSettleMs = 250;
@@ -185,6 +191,7 @@ private:
     MDConfItem *mDndConf;
     MDConfItem *mBedtimeConf;
     MDConfItem *mTheaterConf;
+    MDConfItem *mPhoneDndBedtimeConf;
     QTimer *mSettleTimer;
     QTimer *mNoticeTimer;
     uint mNoticeId = 0;
