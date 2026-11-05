@@ -1125,10 +1125,39 @@ void NotificationService::updatePhoneConnected(int flushDelayMs)
                 emit pictureChanged(picturePath(id), false);
         }
     }
-    // What was dismissed meanwhile, once the phone has set itself up
-    else if(!mQueuedDismissals.isEmpty())
-        QTimer::singleShot(flushDelayMs, this, &NotificationService::flushQueuedDismissals);
+    else {
+        // What was dismissed meanwhile, once the phone has set itself up
+        if(!mQueuedDismissals.isEmpty())
+            QTimer::singleShot(flushDelayMs, this, &NotificationService::flushQueuedDismissals);
+        // The call cards the phone does not post again by then are over (CallGraceMs)
+        mConnectedAt = QDateTime::currentMSecsSinceEpoch();
+        const int connection = ++mConnection;
+        QTimer::singleShot(mCallGraceMs, this, [this, connection] { closeStaleCalls(connection); });
+    }
     emit phoneConnectedChanged(connected);
+}
+
+bool NotificationService::isCallCard(const QStringList &phoneActions)
+{
+    return phoneActions.contains("end") || phoneActions.contains("answer") || phoneActions.contains("reject");
+}
+
+void NotificationService::closeStaleCalls(int connection)
+{
+    // A later (re)connection has a grace of its own; a phone gone again says nothing
+    if(connection != mConnection || !phoneConnected())
+        return;
+    QList<int> stale;
+    for(auto it = mKnownAndroidNotifs.constBegin(); it != mKnownAndroidNotifs.constEnd(); ++it) {
+        // Posted (again) since the phone connected: the call is live. A card
+        // restored from lipstick after a reboot has no posting time at all.
+        if(isCallCard(mPhoneActions.value(it.value())) && mPostedAt.value(it.value(), 0) < mConnectedAt)
+            stale << it.key();
+    }
+    for(const int phoneId : stale) {
+        qInfo().noquote() << QString("Phone notification %1: a call the phone did not post again after connecting, closed").arg(phoneId);
+        removed(phoneId);
+    }
 }
 
 bool NotificationService::findPhone(bool start)

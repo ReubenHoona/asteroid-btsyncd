@@ -21,6 +21,9 @@
  *   - app icons: stored as SVG, used by name, bad icons refused
  *   - a dismiss while no phone is subscribed waits for it; its resync does
  *     not bring the card back
+ *   - a call card (end, or answer/reject) the phone does not post again within the
+ *     grace of a (re)connection is closed (a call that ended while the watch was
+ *     away); one posted again stays, as does every other card
  *   - the same while the link is gone but BlueZ kept the subscription (a
  *     bonded phone): sent after the phone's setup once the link is back
  *   - keys: the same phone notification under a new phone id updates its card;
@@ -174,6 +177,12 @@ static Posted lastPosted(FakeLipstick &fake)
 {
     QMutexLocker l(&fake.lock);
     return fake.posted.isEmpty() ? Posted() : fake.posted.last();
+}
+
+static bool wasClosed(FakeLipstick &fake, uint id)
+{
+    QMutexLocker l(&fake.lock);
+    return fake.closed.contains(id);
 }
 
 static void emitActionInvoked(QDBusConnection &fakeConn, uint id, const QString &key)
@@ -596,6 +605,48 @@ int main(int argc, char **argv)
     CHECK(collector.feedback.isEmpty());   // the phone is still setting itself up
     CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }, NotificationService::PhoneSetupMs + 3000));
     CHECK(collector.feedback == "<action><id>91</id><ty>dismiss</ty></action>");
+
+    // Calls after a (re)connection: the phone never lists them in its resync, and a call
+    // that ended while the watch was away (down, out of range) would keep its card, and
+    // the launcher's in-call view, up for hours. A call card the phone does not post again
+    // within the grace of a (re)connection goes; one it posts again (a live call) stays,
+    // and so does anything but a call. Closed by the watch: no dismiss to the phone.
+    service.setCallGraceMs(700);
+    {
+        const int calls = postedCount(fake);
+        collector.feedback.clear();
+        write(driver, "<insert><id>120</id><vb>none</vb><an>Ongoing call</an><su>Kim</su><ac>end</ac></insert>");
+        write(driver, "<insert><id>121</id><vb>ringtone</vb><an>Phone</an><su>Lou</su><ac>answer,reject,silence</ac></insert>");
+        write(driver, "<insert><id>122</id><vb>none</vb><an>Mail</an><su>Max</su><bo>Hi</bo></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == calls + 3; }));
+        uint kim = 0, lou = 0, max = 0;
+        {
+            QMutexLocker l(&fake.lock);
+            kim = fake.nextId - 3;
+            lou = fake.nextId - 2;
+            max = fake.nextId - 1;
+        }
+        spin(1000);
+        CHECK(!wasClosed(fake, kim) && !wasClosed(fake, lou));   // posted on this connection: live
+        service.setLinkConnected(false);
+        service.setLinkConnected(true);
+        // The phone posts the live call again (its state changed, or it re-asserts calls)
+        write(driver, "<insert><id>120</id><vb>none</vb><an>Ongoing call</an><su>Kim</su><ac>end</ac></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == calls + 4; }));
+        spin(300);
+        CHECK(!wasClosed(fake, lou));                            // not before the grace is over
+        CHECK(waitFor([&] { return wasClosed(fake, lou); }, 3000));
+        spin(300);
+        CHECK(!wasClosed(fake, kim));
+        CHECK(!wasClosed(fake, max));
+        // Nothing from the phone about the call at the next reconnection: it is over
+        service.setLinkConnected(false);
+        service.setLinkConnected(true);
+        CHECK(waitFor([&] { return wasClosed(fake, kim); }, 3000));
+        CHECK(!wasClosed(fake, max));
+        CHECK(collector.feedback.isEmpty());
+    }
+    service.setCallGraceMs(NotificationService::CallGraceMs);
 
     // Framing. Split inside the closing tag: still posted
     int count = postedCount(fake);

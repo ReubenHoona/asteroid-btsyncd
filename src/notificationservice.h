@@ -366,6 +366,23 @@ public:
     // After the link is back: the phone has set itself up again by then (service
     // discovery, its subscriptions): queued dismissals are sent
     static const int PhoneSetupMs = 5000;
+    /*
+     * Calls after a (re)connection. The phone posts a call's card (ringing:
+     * answer/reject; in progress: end) and removes it only when the call's
+     * state changes, and its notification list (sync) never names calls. A
+     * removal the watch missed (down, or out of range, when the call ended)
+     * would leave the card, and the launcher's in-call view, up for hours.
+     * So every (re)connection closes the call cards the phone has not posted
+     * again within CallGraceMs of it: a phone that re-posts a live call keeps
+     * its card, as does every card posted since the connection. (The
+     * launcher ignores restored call cards older than a few minutes as well.)
+     * The grace covers the phone's setup and its resync, which the journal
+     * shows about 12 s after the subscription.
+     */
+    static const int CallGraceMs = 15 * 1000;
+    void setCallGraceMs(int ms) { mCallGraceMs = ms; }
+    // A ringing call or a call in progress, by what the phone offers for it
+    static bool isCallCard(const QStringList &phoneActions);
     // The phone stopped ringing (found there, or its time ran out)
     void phoneStoppedRinging();
 
@@ -397,6 +414,9 @@ private:
     void setFindingPhone(bool ringing);
     void closeNow(uint lipstickId);
     void flushQueuedDismissals();
+    // CallGraceMs after the connection numbered `connection`: the call cards
+    // the phone has not posted since go
+    void closeStaleCalls(int connection);
     // phoneConnected() changed: signal, and what waited for the phone after flushDelayMs
     void updatePhoneConnected(int flushDelayMs);
     static uint contentHash(const QString &summary, const QString &body);
@@ -456,6 +476,11 @@ private:
     // phone subscribes; the phone's resync must not bring them back
     QList<QPair<int, qint64>> mQueuedDismissals;
     QHash<int, qint64> mDismissedAway;
+    // Call cards after a (re)connection (CallGraceMs): when the phone
+    // connected, and which connection the grace timer belongs to
+    qint64 mConnectedAt = 0;
+    int mConnection = 0;
+    int mCallGraceMs = CallGraceMs;
 
     // Notification pictures: the picture of each card (lipstick id -> picture id); when
     // each was asked for, how often one came broken, the ones the phone cannot send
