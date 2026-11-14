@@ -320,6 +320,18 @@ int main(int argc, char **argv)
         write(driver, "<sync>end</sync><clear/><un>1794000000</un>");
         spin(300);
         CHECK(untilIs(1793900000));
+        // 0 is "not known" (the phone syncs no calendar any more): it is written, the stale end goes
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<sync>end</sync><un>0</un>");
+        CHECK(untilIs(0));
+        // a negative value is still not a time
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<sync>end</sync><un>1793900000</un>");
+        CHECK(untilIs(1793900000));
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<sync>end</sync><un>-5</un>");
+        spin(300);
+        CHECK(untilIs(1793900000));
         until.unset();
         spin(200);
     }

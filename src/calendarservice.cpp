@@ -393,15 +393,19 @@ void CalendarService::handleElement(const QByteArray &xml)
         qint64 until = 0;
         if(reader.readNextStartElement())
             until = reader.readElementText().trimmed().toLongLong(&ok);
-        // seconds since 1970 (milliseconds are taken too), a time in this century
+        // seconds since 1970 (milliseconds are taken too), a time in this century; 0 is "not known"
+        // (nothing of the phone's calendar is synced) and is written, so the key goes back to unknown
         if(ok && until > 100000000000LL)
             until /= 1000;
-        if(!ok || until < 1000000000LL || until > 4102444800LL) {
+        if(!ok || (until != 0 && until < 1000000000LL) || until > 4102444800LL) {
             qWarning() << "Calendar: the end of the synced window is not a time, ignored";
             return;
         }
         MDConfItem(QStringLiteral("/org/asteroidos/calendar/synced-until")).set(QVariant::fromValue<qlonglong>(until));
-        qInfo() << "Calendar: the phone's events are synced until" << QDateTime::fromSecsSinceEpoch(until, QTimeZone::utc()).toString(Qt::ISODate);
+        if(until == 0)
+            qInfo() << "Calendar: the synced window is not known";
+        else
+            qInfo() << "Calendar: the phone's events are synced until" << QDateTime::fromSecsSinceEpoch(until, QTimeZone::utc()).toString(Qt::ISODate);
         return;
     }
     if(xml.startsWith("<ev>") || xml.startsWith("<ev ")) {
