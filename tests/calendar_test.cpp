@@ -12,6 +12,7 @@
 
 #include "calendarservice.h"
 #include "common.h"
+#include "fixtures.h"
 
 #include <QCoreApplication>
 #include <QDBusConnection>
@@ -24,7 +25,9 @@
 #include <extendedcalendar.h>
 #include <extendedstorage.h>
 #include <notebook.h>
+#include <KCalendarCore/Alarm>
 #include <KCalendarCore/Event>
+#include <algorithm>
 
 static int failures = 0;
 
@@ -90,6 +93,36 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    // Version 2 of the parser: colour, response, organizer, reminders, the phone's event id
+    {
+        CHECK(CalendarService::normalizeColor("ff3fa9f5") == "ff3fa9f5");
+        CHECK(CalendarService::normalizeColor("FF3FA9F5") == "ff3fa9f5");
+        CHECK(CalendarService::normalizeColor("3fa9f5") == "ff3fa9f5");
+        CHECK(CalendarService::normalizeColor("#3FA9F5") == "ff3fa9f5");
+        CHECK(CalendarService::normalizeColor("").isEmpty() && CalendarService::normalizeColor("red").isEmpty()
+              && CalendarService::normalizeColor("ff3fa9f").isEmpty() && CalendarService::normalizeColor("ff3fa9f5a").isEmpty()
+              && CalendarService::normalizeColor("gg3fa9f5").isEmpty());
+        CHECK(CalendarService::parseReminders("10,30") == QList<int>({10, 30}));
+        CHECK(CalendarService::parseReminders("0,1440,40320") == QList<int>({0, 1440, 40320}));
+        CHECK(CalendarService::parseReminders("10,10,x,-5,40321,,15") == QList<int>({10, 15}));
+        CHECK(CalendarService::parseReminders("1,2,3,4,5,6,7") == QList<int>({1, 2, 3, 4, 5}));
+        CHECK(CalendarService::parseReminders("").isEmpty());
+        CalendarEventData e;
+        CHECK(CalendarService::parseEvent("<ev><id>5</id><st>1767225600</st><co>FF3FA9F5</co><rs>2</rs><or>a &amp; b</or><rm>5,10</rm><ei>99</ei></ev>", &e));
+        CHECK(e.color == "ff3fa9f5" && e.response == 2 && e.organizer == "a & b" && e.reminders == QList<int>({5, 10}) && e.eventId == "99");
+        CalendarEventData n;
+        CHECK(CalendarService::parseEvent("<ev><id>6</id><st>1767225600</st><co>nope</co><rs>4</rs></ev>", &n));
+        CHECK(n.color.isEmpty() && n.response == -1 && n.organizer.isEmpty() && n.reminders.isEmpty() && n.eventId.isEmpty());
+        // the frames Gadgetbridge writes (W2-gb-data), all parse
+        const QList<QByteArray> frames = fixtureFrames("calendar-events-v2.frames.txt");
+        CHECK(frames.size() == 6);
+        CalendarEventData f;
+        CHECK(CalendarService::parseEvent(frames.value(1), &f));
+        CHECK(f.id == "77" && f.title == "Stand-up" && f.start.toSecsSinceEpoch() == 1793200000 && f.end.toSecsSinceEpoch() == 1793203600
+              && f.location == "Room 2" && f.description == "Notes" && f.calendar == "me@example.org/Work" && f.color == "ff3fa9f5"
+              && f.response == 0 && f.organizer == "boss@example.org" && f.reminders == QList<int>({10, 30}) && f.eventId == "12");
+    }
+
     // The parser alone
     {
         CalendarEventData e;
@@ -109,7 +142,7 @@ int main(int argc, char **argv)
 
     {
         const QDBusMessage r = gattCall(driver, CHR_CAPS, "ReadValue", {QVariantMap()});
-        CHECK(r.arguments().value(0).toByteArray() == "<capabilities><version>1</version></capabilities>");
+        CHECK(r.arguments().value(0).toByteArray() == "<capabilities><version>2</version></capabilities>");
     }
 
     // A full sync: three events, one split over two writes
@@ -140,6 +173,80 @@ int main(int argc, char **argv)
         CHECK(holiday && holiday->dtStart().date() == QDate(2026, 1, 1));
         CHECK(holiday && holiday->dtEnd().date() == QDate(2026, 1, 2));
         CHECK(events.contains(uid("103")));
+    }
+
+    // Version 2: the three events of the frames (the same event, as the phone sends it again
+    // each time something about it changed); what is not sent again is gone from the event
+    {
+        const QList<QByteArray> frames = fixtureFrames("calendar-events-v2.frames.txt");
+        auto prop = [](const KCalendarCore::Event::Ptr &e, const char *name) { return e ? e->nonKDECustomProperty(name) : QString(); };
+        write(driver, frames.value(1));
+        spin(1200);
+        {
+            const auto events = readBack();
+            const KCalendarCore::Event::Ptr e = events.value(uid("77"));
+            CHECK(e && e->summary() == "Stand-up" && e->location() == "Room 2" && e->description() == "Notes");
+            CHECK(e && e->dtStart().toSecsSinceEpoch() == 1793200000 && e->dtEnd().toSecsSinceEpoch() == 1793203600);
+            CHECK(prop(e, "X-EOS-COLOR") == "ff3fa9f5");
+            CHECK(prop(e, "X-EOS-RSVP") == "0");
+            CHECK(prop(e, "X-EOS-ORGANIZER") == "boss@example.org");
+            CHECK(prop(e, "X-EOS-CALENDAR") == "me@example.org/Work");
+            CHECK(prop(e, "X-EOS-EVENTID") == "12");
+            // the reminders: display alarms 10 and 30 minutes before, never scheduled
+            CHECK(e && e->alarms().size() == 2);
+            QList<int> offsets;
+            bool display = true;
+            if(e) {
+                for(const KCalendarCore::Alarm::Ptr &a : e->alarms()) {
+                    offsets << int(a->startOffset().asSeconds());
+                    display = display && a->type() == KCalendarCore::Alarm::Display;
+                }
+            }
+            std::sort(offsets.begin(), offsets.end());
+            CHECK(offsets == QList<int>({-1800, -600}) && display);
+        }
+        write(driver, frames.value(2));
+        spin(1200);
+        {
+            const KCalendarCore::Event::Ptr e = readBack().value(uid("77"));
+            CHECK(prop(e, "X-EOS-COLOR") == "ffd50000");
+            CHECK(prop(e, "X-EOS-RSVP") == "1");
+            CHECK(prop(e, "X-EOS-ORGANIZER").isEmpty());
+            CHECK(prop(e, "X-EOS-EVENTID") == "12");
+            CHECK(e && e->alarms().isEmpty());
+        }
+        write(driver, frames.value(3));
+        spin(1200);
+        {
+            const KCalendarCore::Event::Ptr e = readBack().value(uid("77"));
+            CHECK(prop(e, "X-EOS-COLOR").isEmpty() && prop(e, "X-EOS-RSVP").isEmpty());
+            CHECK(prop(e, "X-EOS-CALENDAR") == "me@example.org/Work" && prop(e, "X-EOS-EVENTID") == "12");
+        }
+        // an event without <ei> is its own event id (what the rsvp and open actions send back)
+        write(driver, "<ev><id>78</id><ti>Plain</ti><st>1793200000</st></ev>");
+        spin(1200);
+        CHECK(prop(readBack().value(uid("78")), "X-EOS-EVENTID") == "78");
+        // the whole sequence as one sync: 78 and 101..104 were not sent, so they go; <del> of an
+        // event the watch never had is harmless
+        for(const QByteArray &f : frames)
+            write(driver, f);
+        spin(300);
+        {
+            const auto events = readBack();
+            CHECK(events.size() == 1 && events.contains(uid("77")));
+            CHECK(prop(events.value(uid("77")), "X-EOS-EVENTID") == "12");
+        }
+        write(driver, "<clear/>");
+        spin(1200);
+        CHECK(readBack().isEmpty());
+        // the base for the rest of the test: the three events of the full sync above again
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<ev><id>101</id><ti>Standup (moved)</ti><st>" + QByteArray::number(t0 + 1800) + "</st><en>"
+                      + QByteArray::number(t0 + 2700) + "</en></ev>");
+        write(driver, "<ev><id>102</id><ti>Holiday</ti><st>1767225600</st><en>1767398400</en><ad>1</ad></ev>");
+        write(driver, "<ev><id>103</id><ti>Lunch</ti><st>" + QByteArray::number(t0 + 3 * 3600) + "</st></ev>");
+        write(driver, "<sync>end</sync>");
+        spin(300);
     }
 
     // An update, a deletion, a bad element, then a new event

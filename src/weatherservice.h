@@ -22,11 +22,33 @@
 
 #include "service.h"
 
+/*
+ * The phone's forecast (service 00008071). The old characteristics (city,
+ * ids, min and max temperatures of five days, location) are unchanged; a
+ * phone that also writes the full forecast does it to
+ *   00008006 write (encrypt-authenticated): <wx>JSON</wx>, XML-escaped
+ *            (& < > only), in as many writes as needed, at most 8 KiB of JSON
+ *   00008007 read: <capabilities><version>1</version><extended>1</extended></capabilities>
+ *            (the phone writes 00008006 only when it reads extended 1)
+ * The JSON (version 1) is stored as it came, once it parses and "v" is 1,
+ * at dconf WeatherService::ExtendedKey; timestamp-day0 moves with it. Fields
+ * are absent, never 0, when unknown (eos-weather writes the same key when
+ * the phone is away).
+ */
 class WeatherService : public Service
 {
     Q_OBJECT
 public:
     explicit WeatherService(int index, QDBusConnection bus, QObject *parent = 0);
+
+    static constexpr const char *ExtendedKey = "/org/asteroidos/weather/extended";
+    static const int MaxJsonBytes = 8192;
+
+    // One <wx>...</wx> from the phone: the JSON text if it is a forecast
+    // (an object, "v" 1, "now" an object when there, "hours"/"days" arrays of
+    // at most 24/10 when there), else false
+    static bool parseExtended(const QByteArray &xml, QString *json);
+    static QByteArray capabilities();
 };
 
 #endif // WEATHERSERVICE_H

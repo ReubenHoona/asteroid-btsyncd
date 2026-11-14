@@ -28,6 +28,8 @@ pkg_check_modules(SQLITE3 sqlite3 REQUIRED IMPORTED_TARGET)
 pkg_check_modules(PulseSimple libpulse-simple IMPORTED_TARGET)
 pkg_check_modules(MKCAL libmkcal-qt6 IMPORTED_TARGET)
 pkg_check_modules(KCALCORE KF6CalendarCore IMPORTED_TARGET)
+# the heart rate sensor for "Share heart rate" (without it the service only advertises)
+find_package(Qt6 OPTIONAL_COMPONENTS Sensors)
 
 add_subdirectory(src)
 

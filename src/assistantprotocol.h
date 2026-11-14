@@ -38,9 +38,11 @@
  *   <asr><st>unavailable</st><er>no-url</er></asr>
  *   <asr><id>7</id><tx>The answer.</tx></asr>
  *   <asr><id>7</id><er>timeout|offline|server|auth|bad-request</er></asr>
- * D003 (read): <capabilities><version>3</version><actions>1</actions><names>HASH</names></capabilities>
+ * D003 (read): <capabilities><version>4</version><actions>1</actions><names>HASH</names>
+ *               <events>nav,cam</events></capabilities>
  *   names: the watch takes the phone's contact names (version 3) and has the
  *   list whose hash is HASH (contactnames.h; empty: none)
+ *   events: the phone events the watch takes (version 4)
  *
  * Actions on the phone (version 2: the assistant's directions and text
  * messages; Gadgetbridge 41+). The phone says which it does in every status
@@ -57,6 +59,20 @@
  *   <acr><id>9</id><js>{"ok":true,...} or {"ok":false,"er":"..."}</js></acr>
  *   (the result of each action: asteroid-launcher's assistant/PhoneActions.qml)
  * btsyncd itself answers {"ok":false,"er":"timeout"} or {"ok":false,"er":"disconnected"}.
+ * Actions of version 4 (Gadgetbridge since W2-gb-data), after nav, contacts,
+ * sms, call, hangup: convs, msgs, msend, mread (the phone's conversations,
+ * see messageservice.h), rsvp, open (the phone's calendar or language
+ * settings), wifipw (a Wi-Fi password typed on the phone: the result carries
+ * it, never logged), cam (the camera remote). Each waits for its result
+ * as long as actTimeoutMs() says.
+ *
+ * Events the phone sends on its own (version 4), phone to watch on D002,
+ * joined until </pe>:
+ *   <pe><k>nav</k><js>{"st":"nav","ins":"..."}</js></pe>
+ *   <pe><k>cam</k><js>{"ev":"shot"}</js></pe>
+ *   k: the kind, one of eventKinds() (the capabilities' <events>: the phone
+ *   sends a kind only when the watch lists it); js: the JSON object. They
+ *   leave on the Assistant D-Bus interface as PhoneEvent(kind, json).
  *
  * Contact names for the watch's speech recogniser (version 3; the user agreed to
  * names only, never numbers), phone to watch on D002, each part joined until </cn>:
@@ -72,6 +88,13 @@ QByteArray cancelXml(uint id);
 QByteArray actXml(uint id, const QByteArray &actionJson);
 QByteArray actCancelXml(uint id);
 QByteArray capabilitiesXml(const QByteArray &namesHash = QByteArray());
+
+// The kinds of <pe> the watch takes: nav, cam
+QStringList eventKinds();
+// How long an action waits for the phone's result (ms): wifipw 125 s (the
+// phone waits 120 s for the typed password), msend and sms 40 s, convs and
+// msgs 20 s, any other 15 s
+int actTimeoutMs(const QString &action);
 
 struct Reply {
     bool valid = false;
@@ -89,6 +112,9 @@ struct Reply {
     int namesIndex = -1;
     int namesTotal = 0;
     QStringList namesList;
+    bool event = false;         // <pe>: a phone event
+    QString eventKind;
+    QString eventJson;
 };
 Reply parseReply(const QByteArray &xml);
 

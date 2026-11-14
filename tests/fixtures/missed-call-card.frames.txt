@@ -1,0 +1,2 @@
+<insert><id>590801160</id><vb>normal</vb><an>Phone</an><ai>ios-call-outline</ai><su>Sam Carter</su><bo>Missed call · Mobile</bo><ac>callback</ac><pr>4</pr><ca>missed_call</ca></insert>
+<removed><id>590801160</id></removed>

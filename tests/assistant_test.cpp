@@ -67,7 +67,7 @@ int main(int argc, char **argv)
     check(!parseReply("<asr><tx>no id</tx></asr>").valid, "no id, no state");
 
     // actions on the phone (version 2)
-    check(capabilitiesXml().contains("<version>3</version>") && capabilitiesXml().contains("<actions>1</actions>"), "capabilities");
+    check(capabilitiesXml().contains("<version>4</version>") && capabilitiesXml().contains("<actions>1</actions>"), "capabilities");
     const QByteArray nav = R"({"a":"nav","q":"Riverbend Park & <Mount Alder>","mode":"walking"})";
     const QByteArray act = actXml(9, nav);
     check(act.startsWith("<act><id>9</id><js>") && act.endsWith("</js></act>") && !act.contains("<Mount"), "act framing, escaped");
@@ -94,9 +94,37 @@ int main(int argc, char **argv)
     check(!parseReply("<acr><id>3</id></acr>").valid, "action result without JSON");
 
     // contact names for the recogniser (version 3), invented names
-    check(capabilitiesXml("0123456789abcdef").contains("<version>3</version>")
+    check(capabilitiesXml("0123456789abcdef").contains("<version>4</version>")
           && capabilitiesXml("0123456789abcdef").contains("<names>0123456789abcdef</names>")
           && capabilitiesXml().contains("<names></names>"), "capabilities with the names' hash");
+    // exactly what Gadgetbridge's phone-data-results.frames.txt expects the watch to say
+    check(capabilitiesXml() == "<capabilities><version>4</version><actions>1</actions><names></names><events>nav,cam</events></capabilities>",
+          "capabilities version 4 with the events");
+    check(eventKinds() == QStringList({"nav", "cam"}), "the event kinds");
+
+    // phone events (version 4): the frames of W2-gb-data
+    r = parseReply(R"(<pe><k>nav</k><js>{"st":"nav","ins":"High St &amp; towards Blah","di":"100 yd","dm":91,"act":"left","eta":"11:55","dt":"4.6 mi","pc":35}</js></pe>)");
+    check(r.valid && r.event && r.eventKind == QLatin1String("nav") && r.eventJson.contains(QLatin1String("High St & towards Blah"))
+          && r.eventJson.contains(QLatin1String("\"pc\":35")) && !r.act && r.id == 0, "a nav event");
+    r = parseReply(R"(<pe><k>nav</k><js>{"st":"end"}</js></pe>)");
+    check(r.valid && r.event && r.eventJson == QLatin1String(R"({"st":"end"})"), "the end of navigation");
+    r = parseReply(R"(<pe><k>cam</k><js>{"ev":"shot"}</js></pe>)");
+    check(r.valid && r.event && r.eventKind == QLatin1String("cam") && r.eventJson == QLatin1String(R"({"ev":"shot"})"), "a camera event");
+    check(!parseReply("<pe><js>{}</js></pe>").valid, "an event without a kind");
+    check(!parseReply("<pe><k>nav</k></pe>").valid, "an event without JSON");
+    check(!parseReply("<pe><k>nav</k><js>{}</js>").valid, "an event without its end");
+
+    // how long each action waits for the phone: the passwords' 120 s plus 5, a text 40, the lists 20, the rest 15
+    check(actTimeoutMs("wifipw") == 125000 && actTimeoutMs("msend") == 40000 && actTimeoutMs("sms") == 40000
+          && actTimeoutMs("convs") == 20000 && actTimeoutMs("msgs") == 20000, "act timeouts: wifipw, msend, sms, convs, msgs");
+    check(actTimeoutMs("rsvp") == 15000 && actTimeoutMs("open") == 15000 && actTimeoutMs("mread") == 15000
+          && actTimeoutMs("cam") == 15000 && actTimeoutMs("nav") == 15000 && actTimeoutMs("contacts") == 15000
+          && actTimeoutMs("call") == 15000 && actTimeoutMs("hangup") == 15000 && actTimeoutMs("anything") == 15000,
+          "act timeouts: the rest 15 s");
+
+    // the phone's results of W2-gb-data, as the frames carry them (the password one only checked, never printed)
+    r = parseReply(R"(<acr><id>11</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;not-found&quot;}</js></acr>)");
+    check(r.valid && r.act && r.id == 11 && r.json == QLatin1String(R"({"ok":false,"er":"not-found"})"), "an rsvp error, escaped quotes");
     r = parseReply("<cn><g>a1</g><i>1</i><n>3</n><v>Sam Carter</v><v>Sam</v><v>Lena &amp; Co</v></cn>");
     check(r.valid && r.names && !r.namesOff && r.namesGeneration == QLatin1String("a1") && r.namesIndex == 1
           && r.namesTotal == 3 && r.namesList == QStringList({"Sam Carter", "Sam", "Lena & Co"}), "a part of the names");

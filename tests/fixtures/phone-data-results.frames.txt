@@ -1,0 +1,10 @@
+<acr><id>11</id><js>{&quot;ok&quot;:true,&quot;st&quot;:1}</js></acr>
+<acr><id>11</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;not-found&quot;}</js></acr>
+<acr><id>12</id><js>{&quot;ok&quot;:true,&quot;how&quot;:&quot;started&quot;}</js></acr>
+<acr><id>15</id><js>{&quot;ok&quot;:true,&quot;pw&quot;:&quot;correct horse battery&quot;}</js></acr>
+<acr><id>15</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;timeout&quot;}</js></acr>
+<acr><id>16</id><js>{&quot;ok&quot;:true}</js></acr>
+<pe><k>nav</k><js>{&quot;st&quot;:&quot;nav&quot;,&quot;ins&quot;:&quot;High St towards Blah&quot;,&quot;di&quot;:&quot;100 yd&quot;,&quot;dm&quot;:91,&quot;act&quot;:&quot;left&quot;,&quot;eta&quot;:&quot;11:55&quot;,&quot;dt&quot;:&quot;4.6 mi&quot;,&quot;pc&quot;:35}</js></pe>
+<pe><k>nav</k><js>{&quot;st&quot;:&quot;end&quot;}</js></pe>
+<pe><k>cam</k><js>{&quot;ev&quot;:&quot;shot&quot;}</js></pe>
+<capabilities><version>4</version><actions>1</actions><names></names><events>nav,cam</events></capabilities>

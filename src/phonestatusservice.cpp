@@ -28,6 +28,7 @@
 #include <QDBusInterface>
 #include <QDBusMessage>
 #include <QDebug>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QXmlStreamReader>
 
@@ -126,6 +127,12 @@ bool PhoneDBusApi::DoNotDisturb() { return mService->doNotDisturb(); }
 bool PhoneDBusApi::Bedtime() { return mService->bedtime(); }
 bool PhoneDBusApi::SetDoNotDisturb(bool on) { return mService->setDoNotDisturb(on); }
 
+bool PhoneStatusService::validLocaleTag(const QString &tag)
+{
+    static const QRegularExpression re(QStringLiteral("^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$"));
+    return tag.size() <= 35 && re.match(tag).hasMatch();
+}
+
 QByteArray PhoneStatusService::capabilities()
 {
     return QByteArrayLiteral("<capabilities><version>2</version><battery>1</battery><dnd>1</dnd><bedtime>1</bedtime></capabilities>");
@@ -207,7 +214,7 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
         return;
     int level = mBatteryLevel;
     bool charging = mCharging;
-    QString dnd, bed;
+    QString dnd, bed, locale;
     bool answers = false;
     while(reader.readNextStartElement()) {
         const auto name = reader.name();
@@ -231,6 +238,21 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
             // The phone answers what the watch sends for a reply, an app action and "Open on
             // phone" (the full status at the connection carries it; an older one never does)
             answers = text == QLatin1String("1");
+        } else if(name == QLatin1String("lc")) {
+            locale = text;
+        }
+    }
+    if(!locale.isEmpty()) {
+        locale.replace(QLatin1Char('_'), QLatin1Char('-'));
+        if(validLocaleTag(locale)) {
+            // written when it changed (a status carries <lc> at every connection)
+            MDConfItem key(PhoneLocaleKey);
+            if(key.value().toString() != locale) {
+                qInfo() << "Phone language:" << locale;
+                key.set(locale);
+            }
+        } else {
+            qWarning() << "Phone status: a language tag that is not one, ignored";
         }
     }
     // Sticky: partial statuses do not repeat it; the phone going takes it away

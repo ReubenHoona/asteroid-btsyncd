@@ -79,7 +79,12 @@ private:
  *   CancelAct(u id) -> b
  * Signal ActResult(u id, s json): the phone's result, or {"ok":false,"er":
  * "timeout"|"disconnected"} from btsyncd. Every Act() that returned true gets
- * exactly one.
+ * exactly one. Ids from InternalIdBase up are btsyncd's own (the Messages
+ * API, messageservice.h): Act() refuses them and ActResult never carries them.
+ *
+ * Signal PhoneEvent(s kind, s json): something the phone reports on its own
+ * (assistantprotocol.h): kind nav (the next turn of a Google Maps
+ * navigation, or {"st":"end"}) or cam (the camera remote's state).
  */
 class AssistantDBusApi : public QObject
 {
@@ -101,6 +106,10 @@ signals:
     void Answer(uint id, const QString &text);
     void Failed(uint id, const QString &code);
     void ActResult(uint id, const QString &json);
+    void PhoneEvent(const QString &kind, const QString &json);
+
+private slots:
+    void onActResult(uint id, const QString &json);
 
 private:
     AssistantService *mService;
@@ -123,6 +132,9 @@ public:
     bool act(uint id, const QByteArray &json);
     bool cancelAct(uint id);
 
+    // Action ids from here up belong to btsyncd's own users (MessageService)
+    static const uint InternalIdBase = 0x40000000u;
+
     // From the characteristics
     void onReply(const QByteArray &xml, int mtu);
     void notifyChanged(bool on);
@@ -131,6 +143,7 @@ signals:
     void answered(uint id, const QString &text);
     void failed(uint id, const QString &code);
     void actResult(uint id, const QString &json);
+    void phoneEvent(const QString &kind, const QString &json);
 
 private:
     void expire();

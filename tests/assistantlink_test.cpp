@@ -55,6 +55,7 @@ public:
     QByteArray requests;
     QList<QPair<uint, QString>> failed;
     QList<QPair<uint, QString>> results;
+    QList<QPair<QString, QString>> events;
 public slots:
     void propertiesChanged(const QString &, const QVariantMap &changed, const QStringList &)
     {
@@ -63,6 +64,7 @@ public slots:
     }
     void onFailed(uint id, const QString &code) { failed << qMakePair(id, code); }
     void onActResult(uint id, const QString &json) { results << qMakePair(id, json); }
+    void onPhoneEvent(const QString &kind, const QString &json) { events << qMakePair(kind, json); }
 };
 
 static bool waitFor(const std::function<bool()> &cond, int ms = 3000)
@@ -192,6 +194,8 @@ int main(int argc, char **argv)
                          &collector, SLOT(onFailed(uint, QString))));
     CHECK(driver.connect(SERVICE_NAME, BTSYNCD_ASSISTANT_PATH, "org.asteroidos.btsyncd.Assistant", "ActResult",
                          &collector, SLOT(onActResult(uint, QString))));
+    CHECK(driver.connect(SERVICE_NAME, BTSYNCD_ASSISTANT_PATH, "org.asteroidos.btsyncd.Assistant", "PhoneEvent",
+                         &collector, SLOT(onPhoneEvent(QString, QString))));
     spin(200);
 
     // The phone connects: link, feedback and relay subscriptions, "ready"
@@ -281,8 +285,56 @@ int main(int argc, char **argv)
     writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms</ac></asr>");
     CHECK(api(driver, "Actions").toStringList().size() == 3);
 
+    /* Version 4 (W2-gb-data): the phone's data actions, and events it sends on its own */
+    CHECK(readCaps(driver) == "<capabilities><version>4</version><actions>1</actions><names></names><events>nav,cam</events></capabilities>");
+    writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms,call,hangup,convs,msgs,msend,mread,rsvp,open,wifipw,cam</ac></asr>");
+    CHECK(api(driver, "Actions").toStringList().size() == 13);
+    collector.requests.clear();
+    CHECK(api(driver, "Act", {30u, QStringLiteral("{\"a\":\"wifipw\",\"ssid\":\"Cafe Net\",\"sec\":\"psk\"}")}).toBool() == true);
+    CHECK(api(driver, "Act", {31u, QStringLiteral("{\"a\":\"rsvp\",\"id\":77,\"ei\":12,\"st\":1}")}).toBool() == true);
+    CHECK(api(driver, "Act", {32u, QStringLiteral("{\"a\":\"cam\",\"op\":\"shot\"}")}).toBool() == true);
+    CHECK(waitFor([&] { return collector.requests.contains("<act><id>32</id>"); }));
+    CHECK(collector.requests.contains("<act><id>30</id>") && collector.requests.contains("<act><id>31</id>"));
+    // btsyncd's own ids (the Messages API) are not for the session bus
+    CHECK(api(driver, "Act", {AssistantService::InternalIdBase, QStringLiteral("{\"a\":\"nav\",\"q\":\"Riverbend Park\"}")}).toBool() == false);
+    // the typed password comes back as the result; a result is the phone's own words
+    writeReply(driver, "<acr><id>30</id><js>{&quot;ok&quot;:true,&quot;pw&quot;:&quot;correct horse battery&quot;}</js></acr>");
+    writeReply(driver, "<acr><id>31</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;not-found&quot;}</js></acr>");
+    CHECK(waitFor([&] { return collector.results.size() == 5; }));
+    CHECK(collector.results.value(3).first == 30u && collector.results.value(3).second == QLatin1String("{\"ok\":true,\"pw\":\"correct horse battery\"}"));
+    CHECK(collector.results.value(4).first == 31u && collector.results.value(4).second == QLatin1String("{\"ok\":false,\"er\":\"not-found\"}"));
+    CHECK(api(driver, "CancelAct", {32u}).toBool() == true);
+    // phone events: nav and cam come out as PhoneEvent(kind, json); other kinds, bad JSON and
+    // a half event do not; one split over two writes and one after a status in the same write do
+    collector.events.clear();
+    writeReply(driver, "<pe><k>nav</k><js>{&quot;st&quot;:&quot;nav&quot;,&quot;ins&quot;:&quot;High St towards Blah&quot;,&quot;dm&quot;:91,&quot;pc&quot;:35}</js></pe>");
+    writeReply(driver, "<pe><k>cam</k><js>{&quot;ev&quot;:&quot;shot&quot;}</js></pe>");
+    writeReply(driver, "<pe><k>weather</k><js>{&quot;x&quot;:1}</js></pe>");
+    writeReply(driver, "<pe><k>nav</k><js>not json</js></pe>");
+    writeReply(driver, "<pe><k>nav</k><js>[1,2]</js></pe>");
+    {
+        QVariantMap o;
+        o.insert("mtu", 23);
+        CHECK(gattCall(driver, CHR_REPLY, "WriteValue", {QByteArray("<pe><k>nav</k><js>{&quot;st&quot;:&quo"), o}).type() == QDBusMessage::ReplyMessage);
+        CHECK(gattCall(driver, CHR_REPLY, "WriteValue", {QByteArray("t;end&quot;}</js></pe>"), o}).type() == QDBusMessage::ReplyMessage);
+    }
+    writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms,call,hangup,convs,msgs,msend,mread,rsvp,open,wifipw,cam</ac></asr><pe><k>cam</k><js>{&quot;ev&quot;:&quot;closed&quot;}</js></pe>");
+    CHECK(waitFor([&] { return collector.events.size() == 4; }));
+    spin(200);
+    CHECK(collector.events.size() == 4);
+    CHECK(collector.events.value(0).first == "nav" && collector.events.value(0).second.contains("High St towards Blah")
+          && collector.events.value(0).second.contains("\"pc\":35"));
+    CHECK(collector.events.value(1) == qMakePair(QStringLiteral("cam"), QStringLiteral("{\"ev\":\"shot\"}")));
+    CHECK(collector.events.value(2) == qMakePair(QStringLiteral("nav"), QStringLiteral("{\"st\":\"end\"}")));
+    CHECK(collector.events.value(3) == qMakePair(QStringLiteral("cam"), QStringLiteral("{\"ev\":\"closed\"}")));
+    CHECK(api(driver, "Actions").toStringList().size() == 13);
+    collector.results.clear();
+    // back to the three actions the rest of this test is about
+    writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms</ac></asr>");
+    CHECK(api(driver, "Actions").toStringList().size() == 3);
+
     /* Contact names for the recogniser (version 3) */
-    CHECK(readCaps(driver).contains("<version>3</version>") && readCaps(driver).contains("<names></names>"));
+    CHECK(readCaps(driver).contains("<version>4</version>") && readCaps(driver).contains("<names></names>"));
     const QStringList book = inventedBook();
     const QList<QByteArray> parts = namesParts(book, "b1");
     CHECK(parts.size() >= 4);                       // 1025 phrases do not fit in one part

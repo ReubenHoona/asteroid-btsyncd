@@ -1,0 +1,6 @@
+<sync>begin</sync>
+<ev><id>77</id><ti>Stand-up</ti><st>1793200000</st><en>1793203600</en><lo>Room 2</lo><de>Notes</de><cn>me@example.org/Work</cn><co>ff3fa9f5</co><rs>0</rs><or>boss@example.org</or><rm>10,30</rm><ei>12</ei></ev>
+<ev><id>77</id><ti>Stand-up</ti><st>1793200000</st><en>1793203600</en><lo>Room 2</lo><de>Notes</de><cn>me@example.org/Work</cn><co>ffd50000</co><rs>1</rs><ei>12</ei></ev>
+<ev><id>77</id><ti>Stand-up</ti><st>1793200000</st><en>1793203600</en><lo>Room 2</lo><de>Notes</de><cn>me@example.org/Work</cn><ei>12</ei></ev>
+<del><id>42</id></del>
+<sync>end</sync>

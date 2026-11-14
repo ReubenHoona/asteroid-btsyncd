@@ -1,0 +1,2 @@
+<ps><v>4</v><bl>80</bl><bc>0</bc><dnd>off</dnd><lc>en-NZ</lc></ps>
+<ps><lc>pt-BR</lc></ps>

@@ -28,9 +28,11 @@
 #include <extendedcalendar.h>
 #include <extendedstorage.h>
 #include <notebook.h>
+#include <KCalendarCore/Alarm>
 #include <KCalendarCore/Event>
+#include <QRegularExpression>
 
-static const char CAPABILITIES[] = "<capabilities><version>1</version></capabilities>";
+static const char CAPABILITIES[] = "<capabilities><version>2</version></capabilities>";
 
 // The notebook the phone's events go to, and the prefix of their uids
 static const char NotebookUid[] = "8f1c2e4a-5b7d-4e6f-9a0b-a57e401d05ca";
@@ -82,6 +84,14 @@ public:
         return true;
     }
 
+    static void setOrRemove(const KCalendarCore::Event::Ptr &ev, const char *name, const QString &value)
+    {
+        if(value.isEmpty())
+            ev->removeNonKDECustomProperty(name);
+        else
+            ev->setNonKDECustomProperty(name, value);
+    }
+
     static QString uidFor(const QString &id)
     {
         return QLatin1String(UidPrefix) + id + QLatin1String(UidSuffix);
@@ -111,6 +121,19 @@ public:
         ev->setLocation(e.location);
         ev->setDescription(e.description);
         ev->setReadOnly(false);
+        setOrRemove(ev, CalendarService::PropColor, e.color);
+        setOrRemove(ev, CalendarService::PropResponse, e.response >= 0 ? QString::number(e.response) : QString());
+        setOrRemove(ev, CalendarService::PropOrganizer, e.organizer);
+        setOrRemove(ev, CalendarService::PropCalendar, e.calendar);
+        setOrRemove(ev, CalendarService::PropEventId, e.eventId.isEmpty() ? e.id : e.eventId);
+        // The reminders: display alarms before the start, never enabled
+        ev->clearAlarms();
+        for(int minutes : e.reminders) {
+            KCalendarCore::Alarm::Ptr alarm = ev->newAlarm();
+            alarm->setType(KCalendarCore::Alarm::Display);
+            alarm->setStartOffset(KCalendarCore::Duration(-minutes * 60, KCalendarCore::Duration::Seconds));
+            alarm->setEnabled(false);
+        }
         const QTimeZone tz = QTimeZone::systemTimeZone();
         if(e.allDay) {
             // The phone's all-day times are UTC midnights; the end is exclusive
@@ -291,6 +314,34 @@ static QDateTime fromEpoch(const QString &text)
     return ok ? QDateTime::fromSecsSinceEpoch(secs, QTimeZone::utc()) : QDateTime();
 }
 
+QString CalendarService::normalizeColor(const QString &text)
+{
+    static const QRegularExpression re(QStringLiteral("^(?:[0-9a-fA-F]{2})?[0-9a-fA-F]{6}$"));
+    QString c = text.trimmed();
+    if(c.startsWith(QLatin1Char('#')))
+        c.remove(0, 1);
+    if(!re.match(c).hasMatch())
+        return QString();
+    if(c.size() == 6)
+        c.prepend(QStringLiteral("ff"));
+    return c.toLower();
+}
+
+QList<int> CalendarService::parseReminders(const QString &text)
+{
+    QList<int> minutes;
+    for(const QString &part : text.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        bool ok = false;
+        const int m = part.trimmed().toInt(&ok);
+        if(!ok || m < 0 || m > MaxReminderMinutes || minutes.contains(m))
+            continue;
+        minutes << m;
+        if(minutes.size() == MaxReminders)
+            break;
+    }
+    return minutes;
+}
+
 bool CalendarService::parseEvent(const QByteArray &xml, CalendarEventData *event)
 {
     QXmlStreamReader reader(xml);
@@ -306,6 +357,15 @@ bool CalendarService::parseEvent(const QByteArray &xml, CalendarEventData *event
         else if(n == QLatin1String("lo")) event->location = reader.readElementText();
         else if(n == QLatin1String("de")) event->description = reader.readElementText();
         else if(n == QLatin1String("cn")) event->calendar = reader.readElementText();
+        else if(n == QLatin1String("co")) event->color = normalizeColor(reader.readElementText());
+        else if(n == QLatin1String("rs")) {
+            bool ok = false;
+            const int r = reader.readElementText().trimmed().toInt(&ok);
+            event->response = ok && r >= 0 && r <= 3 ? r : -1;
+        }
+        else if(n == QLatin1String("or")) event->organizer = reader.readElementText().trimmed();
+        else if(n == QLatin1String("rm")) event->reminders = parseReminders(reader.readElementText());
+        else if(n == QLatin1String("ei")) event->eventId = reader.readElementText().trimmed();
         else reader.skipCurrentElement();
     }
     if(reader.hasError()) {

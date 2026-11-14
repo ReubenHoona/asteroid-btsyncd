@@ -756,6 +756,33 @@ int main(int argc, char **argv)
         CHECK(NotificationService::RepeatCallerMs == 15 * 60 * 1000);
     }
 
+    // ---- calls-15: the missed call card as Gadgetbridge writes it (tests/fixtures/missed-call-card.frames.txt):
+    // one action, callback (the watch's Call button), category missed_call, importance 4; a press goes back as
+    // feedback type callback, a removal closes the card
+    {
+        QFile f(QStringLiteral(FRAMES_DIR "/../fixtures/missed-call-card.frames.txt"));
+        CHECK(f.open(QIODevice::ReadOnly));
+        const QList<QByteArray> lines = f.readAll().split('\n');
+        CHECK(lines.size() >= 2 && lines.value(0).startsWith("<insert>") && lines.value(1).startsWith("<removed>"));
+        write(driver, lines.value(0));
+        CHECK(next());
+        const Posted p = lastPosted(fake);
+        CHECK(p.appName == "Phone");
+        CHECK(p.body.startsWith("Missed call"));
+        CHECK(!p.summary.isEmpty());
+        CHECK(p.actions == (QStringList() << "callback" << "Call"));
+        CHECK(p.hints.value(NotificationService::CategoryHint).toString() == "missed_call");
+        CHECK(p.hints.value("x-asteroid-phone-actions").toString() == "callback");
+        const uint card = newestId(fake);
+        collector.feedback.clear();
+        emitActionInvoked(fakeConn, card, "callback");
+        CHECK(waitFor([&] { return collector.feedback == "<action><id>590801160</id><ty>callback</ty></action>"; }));
+        // the phone's copy going (its own notification dismissed) takes the card off the watch
+        const int closedBefore = fake.closed.size();
+        write(driver, lines.value(1));
+        CHECK(waitFor([&] { QMutexLocker l(&fake.lock); return fake.closed.size() > closedBefore && fake.closed.contains(card); }));
+    }
+
     // ---- The elements the phone does not send: nothing new in the hints
     {
         write(driver, "<insert><id>160</id><vb>none</vb><an>Chat</an><su>Plain</su><bo>x</bo></insert>");

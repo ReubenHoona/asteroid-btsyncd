@@ -1,0 +1,6 @@
+<act><id>11</id><js>{&quot;a&quot;:&quot;rsvp&quot;,&quot;id&quot;:77,&quot;ei&quot;:12,&quot;st&quot;:1}</js></act>
+<act><id>12</id><js>{&quot;a&quot;:&quot;open&quot;,&quot;w&quot;:&quot;event&quot;,&quot;id&quot;:77,&quot;ei&quot;:12,&quot;b&quot;:1793200000}</js></act>
+<act><id>13</id><js>{&quot;a&quot;:&quot;open&quot;,&quot;w&quot;:&quot;calendar&quot;,&quot;t&quot;:1793200000}</js></act>
+<act><id>14</id><js>{&quot;a&quot;:&quot;open&quot;,&quot;w&quot;:&quot;locale&quot;}</js></act>
+<act><id>15</id><js>{&quot;a&quot;:&quot;wifipw&quot;,&quot;ssid&quot;:&quot;Cafe Net&quot;,&quot;sec&quot;:&quot;psk&quot;}</js></act>
+<act><id>16</id><js>{&quot;a&quot;:&quot;cam&quot;,&quot;op&quot;:&quot;shot&quot;}</js></act>

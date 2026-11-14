@@ -129,3 +129,30 @@ add_executable(screenshot_test screenshot_test.cpp ../src/screenshotservice.cpp
 	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
 target_include_directories(screenshot_test PRIVATE ../src)
 target_link_libraries(screenshot_test PRIVATE Qt6::Core Qt6::DBus)
+
+# W2-btsyncd-data. The frames Gadgetbridge writes (W2-gb-data) are in tests/fixtures
+# The time characteristic's 24-hour flag and the phone's language (<lc>), on a private bus
+# with a dconf-service, like weather_test
+add_executable(phonedata_test phonedata_test.cpp ../src/timeservice.cpp ../src/settime.cpp ../src/phonestatusservice.cpp
+	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(phonedata_test PRIVATE ../src)
+target_link_libraries(phonedata_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+# The Messages API over the assistant relay (a fake phone), on a private bus like assistantlink_test
+add_executable(messages_test messages_test.cpp ../src/messageservice.cpp ../src/assistantservice.cpp ../src/assistantprotocol.cpp ../src/contactnames.cpp
+	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(messages_test PRIVATE ../src)
+target_link_libraries(messages_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+# "Share heart rate": the Heart Rate Service with a fake BlueZ and a fake sensor, on a private bus
+# with a dconf-service, like weather_test
+add_executable(heartrate_test heartrate_test.cpp ../src/heartrateservice.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
+target_include_directories(heartrate_test PRIVATE ../src)
+target_link_libraries(heartrate_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+foreach(t weather_test calendar_test phonedata_test messages_test)
+	if(TARGET ${t})
+		target_compile_definitions(${t} PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+	endif()
+endforeach()

@@ -26,6 +26,8 @@
 #include "voiceservice.h"
 #include "phonestatusservice.h"
 #include "assistantservice.h"
+#include "messageservice.h"
+#include "heartrateservice.h"
 #ifdef BTSYNCD_HAVE_CALENDAR
 #include "calendarservice.h"
 #endif
@@ -59,7 +61,13 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     addService(new PhoneStatusService(9, bus, notifications));
     // Questions of the assistant (asteroid-assistant), relayed by the
     // phone to the answer server set there
-    addService(new AssistantService(10, bus, notifications));
+    AssistantService *assistant = new AssistantService(10, bus, notifications);
+    addService(assistant);
+    // The phone's conversations for the messages app, over the same relay
+    new MessageService(assistant, QDBusConnection::sessionBus(), assistant);
+    // "Share heart rate": the standard Heart Rate Service, advertised only
+    // while the quick panel's toggle is on
+    addService(new HeartRateService(11, bus));
 
     qDBusRegisterMetaType<InterfaceList>();
     qDBusRegisterMetaType<ManagedObjectList>();

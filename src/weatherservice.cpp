@@ -16,10 +16,16 @@
  */
 
 #include <MDConfItem>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QXmlStreamReader>
 
 #include "weatherservice.h"
 #include "characteristic.h"
 #include "common.h"
+#include "messagejoiner.h"
+#include "wakehold.h"
 #include <time.h>
 #include <math.h>
 #include <cmath>
@@ -113,6 +119,85 @@ public slots:
     }
 };
 
+bool WeatherService::parseExtended(const QByteArray &xml, QString *json)
+{
+    QXmlStreamReader reader(xml);
+    if(!reader.readNextStartElement() || reader.name() != QLatin1String("wx"))
+        return false;
+    const QString text = reader.readElementText();
+    if(reader.hasError())
+        return false;
+    const QByteArray bytes = text.toUtf8();
+    if(bytes.isEmpty() || bytes.size() > MaxJsonBytes)
+        return false;
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &error);
+    if(error.error != QJsonParseError::NoError || !doc.isObject())
+        return false;
+    const QJsonObject o = doc.object();
+    if(o.value(QStringLiteral("v")).toInt(-1) != 1)
+        return false;
+    // What the weather app indexes into must be what it expects
+    if(o.contains(QStringLiteral("now")) && !o.value(QStringLiteral("now")).isObject())
+        return false;
+    if(o.contains(QStringLiteral("hours")) && (!o.value(QStringLiteral("hours")).isArray() || o.value(QStringLiteral("hours")).toArray().size() > 24))
+        return false;
+    if(o.contains(QStringLiteral("days")) && (!o.value(QStringLiteral("days")).isArray() || o.value(QStringLiteral("days")).toArray().size() > 10))
+        return false;
+    if(o.contains(QStringLiteral("aqi")) && !o.value(QStringLiteral("aqi")).isObject())
+        return false;
+    *json = text;
+    return true;
+}
+
+QByteArray WeatherService::capabilities()
+{
+    return QByteArrayLiteral("<capabilities><version>1</version><extended>1</extended></capabilities>");
+}
+
+class WeatherExtendedChrc : public Characteristic
+{
+public:
+    WeatherExtendedChrc(QDBusConnection bus, int index, Service *service)
+        : Characteristic(bus, index, WEAT_EXT_UUID, {"encrypt-authenticated-write"}, service),
+          // escaping can make the XML longer than the JSON it holds
+          mJoiner("Weather", {"wx"}, 3 * WeatherService::MaxJsonBytes) {}
+
+public slots:
+    void WriteValue(QByteArray value, QVariantMap options)
+    {
+        // The phone may write while the watch sleeps: awake until it is stored
+        WakeHoldScope wake;
+        for(const auto &message : mJoiner.add(value, MessageJoiner::offsetOf(options))) {
+            QString json;
+            if(!WeatherService::parseExtended(message.second, &json)) {
+                qWarning() << "Weather: a forecast that does not parse, ignored," << message.second.size() << "bytes";
+                continue;
+            }
+            MDConfItem(WeatherService::ExtendedKey).set(json);
+            MDConfItem("/org/asteroidos/weather/timestamp-day0").set((int)time(NULL));
+        }
+    }
+
+private:
+    MessageJoiner mJoiner;
+};
+
+class WeatherCapabilitiesChrc : public Characteristic
+{
+public:
+    WeatherCapabilitiesChrc(QDBusConnection bus, int index, Service *service)
+        : Characteristic(bus, index, WEAT_CAPS_UUID, {"encrypt-authenticated-read"}, service) {}
+
+public slots:
+    QByteArray ReadValue(QVariantMap options)
+    {
+        const QByteArray value = WeatherService::capabilities();
+        const int offset = options.value("offset", 0).toInt();
+        return offset > 0 ? value.mid(offset) : value;
+    }
+};
+
 WeatherService::WeatherService(int index, QDBusConnection bus, QObject *parent) : Service(bus, index, WEATHER_UUID, parent)
 {
     addCharacteristic(new WeatherCityChrc(bus, 0, this));
@@ -120,4 +205,6 @@ WeatherService::WeatherService(int index, QDBusConnection bus, QObject *parent) 
     addCharacteristic(new WeatherMaxTempsChrc(bus, 2, this));
     addCharacteristic(new WeatherMinTempsChrc(bus, 3, this));
     addCharacteristic(new WeatherLocationChrc(bus, 4, this));
+    addCharacteristic(new WeatherExtendedChrc(bus, 5, this));
+    addCharacteristic(new WeatherCapabilitiesChrc(bus, 6, this));
 }

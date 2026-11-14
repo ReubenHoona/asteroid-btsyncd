@@ -58,6 +58,8 @@ static QString actionLabel(const QString &key)
     if(key == "reject") return QObject::tr("Decline");
     if(key == "silence") return QObject::tr("Silence");
     if(key == "end")    return QObject::tr("End call");
+    // The missed call card's button (calls-15; stock: "Call")
+    if(key == "callback") return QObject::tr("Call");
     // The find-my-watch page's button, as stock's Find Hub ("Stop sound")
     if(key == "found")  return QObject::tr("Stop sound");
     return key;

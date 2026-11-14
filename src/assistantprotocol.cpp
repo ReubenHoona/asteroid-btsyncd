@@ -56,7 +56,47 @@ QByteArray actCancelXml(uint id)
 
 QByteArray capabilitiesXml(const QByteArray &namesHash)
 {
-    return "<capabilities><version>3</version><actions>1</actions><names>" + namesHash + "</names></capabilities>";
+    return "<capabilities><version>4</version><actions>1</actions><names>" + namesHash + "</names><events>"
+           + eventKinds().join(QLatin1Char(',')).toLatin1() + "</events></capabilities>";
+}
+
+QStringList eventKinds()
+{
+    return {QStringLiteral("nav"), QStringLiteral("cam")};
+}
+
+int actTimeoutMs(const QString &action)
+{
+    if (action == QLatin1String("wifipw"))
+        return 125000;
+    if (action == QLatin1String("msend") || action == QLatin1String("sms"))
+        return 40000;
+    if (action == QLatin1String("convs") || action == QLatin1String("msgs"))
+        return 20000;
+    return 15000;
+}
+
+// <pe><k>nav</k><js>{...}</js></pe>
+static Reply parseEvent(QXmlStreamReader &x)
+{
+    Reply r;
+    r.event = true;
+    while (!x.atEnd()) {
+        x.readNext();
+        if (x.isStartElement()) {
+            const QStringView n = x.name();
+            if (n == QLatin1String("k"))
+                r.eventKind = x.readElementText().trimmed();
+            else if (n == QLatin1String("js"))
+                r.eventJson = x.readElementText();
+            else
+                x.skipCurrentElement();
+        } else if (x.isEndElement() && x.name() == QLatin1String("pe")) {
+            r.valid = !r.eventKind.isEmpty() && !r.eventJson.isEmpty();
+            return r.valid ? r : Reply();
+        }
+    }
+    return Reply();
 }
 
 // <cn>...</cn>: a part of the contact names, or <off/>
@@ -108,6 +148,8 @@ Reply parseReply(const QByteArray &xml)
             const QStringView n = x.name();
             if (!inside && n == QLatin1String("cn"))
                 return parseNames(x);
+            if (!inside && n == QLatin1String("pe"))
+                return parseEvent(x);
             if (!inside && (n == QLatin1String("asr") || n == QLatin1String("acr"))) {
                 inside = true;
                 r.act = n == QLatin1String("acr");

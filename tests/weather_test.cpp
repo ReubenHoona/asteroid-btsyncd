@@ -6,16 +6,22 @@
  *   - the forecast's location (00008005, "LAT,LON") -> phone-location/{latitude,longitude},
  *     rounded to 0.01; bad values ignored; a city write unsets it (a phone that
  *     sends no location leaves no other city's coordinates behind)
+ *   - the full forecast (00008006, <wx>JSON</wx> from W2-gb-data's frames) -> dconf
+ *     /org/asteroidos/weather/extended, the capabilities (00008007) say extended 1
  * Greenwich only (51.48, 0.00).
  */
 
 #include "weatherservice.h"
 #include "common.h"
+#include "fixtures.h"
 
 #include <QCoreApplication>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QElapsedTimer>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QVariantMap>
 #include <MDConfItem>
 #include <cmath>
@@ -32,6 +38,8 @@ static const char *CHR_IDS = "/org/asteroidos/btsyncd/service0/char1";
 static const char *CHR_MAX = "/org/asteroidos/btsyncd/service0/char2";
 static const char *CHR_MIN = "/org/asteroidos/btsyncd/service0/char3";
 static const char *CHR_LOC = "/org/asteroidos/btsyncd/service0/char4";
+static const char *CHR_EXT = "/org/asteroidos/btsyncd/service0/char5";
+static const char *CHR_CAPS = "/org/asteroidos/btsyncd/service0/char6";
 
 static const char *LAT = "/org/asteroidos/weather/phone-location/latitude";
 static const char *LON = "/org/asteroidos/weather/phone-location/longitude";
@@ -144,6 +152,80 @@ int main(int argc, char **argv)
     CHECK(write(driver, CHR_CITY, "Greenwich"));
     EVENTUALLY(value("/org/asteroidos/weather/city-name").toString() == "Greenwich");
     EVENTUALLY(!value(LAT).isValid() && !value(LON).isValid());
+
+    // ---- the full forecast ----
+    static const char *EXT = "/org/asteroidos/weather/extended";
+    static const char *DAY0 = "/org/asteroidos/weather/timestamp-day0";
+    // what the watch says it takes: the phone writes 00008006 only when it reads extended 1
+    {
+        QDBusMessage m = QDBusMessage::createMethodCall(btsyncdName, CHR_CAPS, GATT_CHRC_IFACE, "ReadValue");
+        m.setArguments({QVariantMap()});
+        const QDBusMessage r = driver.call(m, QDBus::BlockWithGui, 5000);
+        CHECK(r.type() == QDBusMessage::ReplyMessage);
+        CHECK(r.arguments().value(0).toByteArray() == "<capabilities><version>1</version><extended>1</extended></capabilities>");
+        QVariantMap off;
+        off.insert("offset", 14);
+        m.setArguments({off});
+        CHECK(driver.call(m, QDBus::BlockWithGui, 5000).arguments().value(0).toByteArray()
+              == QByteArray("<capabilities><version>1</version><extended>1</extended></capabilities>").mid(14));
+    }
+    const QByteArray json = fixtureFile("weather-extended-greenwich.json").trimmed();
+    const QList<QByteArray> frames = fixtureFrames("weather-extended-greenwich.frames.txt");
+    CHECK(frames.size() == 5 && frames.value(0).size() == 500 && json.size() < WeatherService::MaxJsonBytes);
+    MDConfItem(DAY0).set(1);
+    // the five 500-byte writes of Gadgetbridge join into one forecast, stored as it came
+    for(const QByteArray &f : frames)
+        CHECK(write(driver, CHR_EXT, f));
+    EVENTUALLY(value(EXT).toString().toUtf8() == json);
+    EVENTUALLY(value(DAY0).toInt() > 1);
+    {
+        const QJsonObject o = QJsonDocument::fromJson(value(EXT).toString().toUtf8()).object();
+        CHECK(o.value("v").toInt() == 1 && o.value("hours").toArray().size() == 24 && o.value("days").toArray().size() == 8);
+        CHECK(o.value("now").toObject().contains("c") && o.value("aqi").isObject() == o.contains("aqi"));
+    }
+    // a message cut off by a disconnection, then a new one: the new one is stored
+    MDConfItem(DAY0).set(1);
+    CHECK(write(driver, CHR_EXT, frames.value(0)));
+    CHECK(write(driver, CHR_EXT, frames.value(1)));
+    for(const QByteArray &f : frames)
+        CHECK(write(driver, CHR_EXT, f));
+    EVENTUALLY(value(DAY0).toInt() > 1);
+    CHECK(value(EXT).toString().toUtf8() == json);
+    // XML escaping: & < > only, as the phone writes it
+    CHECK(write(driver, CHR_EXT, "<wx>{\"v\":1,\"t\":5,\"by\":\"A &amp; B &lt;c&gt;\"}</wx>"));
+    EVENTUALLY(value(EXT).toString() == "{\"v\":1,\"t\":5,\"by\":\"A & B <c>\"}");
+    // what is not a forecast changes nothing: other versions, not JSON, not an object, too many
+    // hours or days, the wrong kind of "now", more than 8 KiB, an empty one
+    const QString kept = value(EXT).toString();
+    QByteArray hours25 = "<wx>{\"v\":1,\"hours\":[";
+    for(int i = 0; i < 25; i++)
+        hours25 += QByteArray(i ? "," : "") + "{\"t\":" + QByteArray::number(i) + "}";
+    hours25 += "]}</wx>";
+    QByteArray days11 = "<wx>{\"v\":1,\"days\":[";
+    for(int i = 0; i < 11; i++)
+        days11 += QByteArray(i ? "," : "") + "{\"d\":" + QByteArray::number(i) + "}";
+    days11 += "]}</wx>";
+    // 24 hours and 10 days are fine
+    QByteArray hours24 = "<wx>{\"v\":1,\"t\":6,\"hours\":[";
+    for(int i = 0; i < 24; i++)
+        hours24 += QByteArray(i ? "," : "") + "{\"t\":" + QByteArray::number(i) + "}";
+    hours24 += "]}</wx>";
+    QByteArray big = "<wx>{\"v\":1,\"by\":\"" + QByteArray(WeatherService::MaxJsonBytes, 'x') + "\"}</wx>";
+    for(const QByteArray &bad : {QByteArray("<wx>{\"v\":2,\"t\":7}</wx>"), QByteArray("<wx>{\"t\":7}</wx>"),
+                                 QByteArray("<wx>not json</wx>"), QByteArray("<wx>[1,2]</wx>"), QByteArray("<wx></wx>"),
+                                 QByteArray("<wx>{\"v\":1,\"now\":5}</wx>"), QByteArray("<wx>{\"v\":1,\"hours\":{}}</wx>"),
+                                 QByteArray("<wx>{\"v\":1,\"aqi\":[]}</wx>"), hours25, days11, big}) {
+        CHECK(write(driver, CHR_EXT, bad));
+        spin(150);
+        if(value(EXT).toString() != kept) {
+            fprintf(stderr, "FAIL: a forecast that is none changed the stored one: %s\n", bad.left(40).constData());
+            failures++;
+        }
+    }
+    CHECK(write(driver, CHR_EXT, hours24));
+    EVENTUALLY(value(EXT).toString().contains("\"t\":6"));
+    // the old characteristics are untouched by all of this
+    CHECK(value("/org/asteroidos/weather/day0/id").toInt() == 801);
 
     if(failures)
         fprintf(stderr, "%d check(s) failed\n", failures);

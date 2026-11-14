@@ -33,7 +33,8 @@ class QTimer;
  * (service 0000C071):
  *   status   0000C001 write, phone -> watch, any of
  *              <ps><v>PROTOCOL</v><bl>BATTERY %</bl><bc>0|1 charging</bc>
- *                  <dnd>off|priority|alarms|none</dnd><bed>on|off</bed></ps>
+ *                  <dnd>off|priority|alarms|none</dnd><bed>on|off</bed>
+ *                  <lc>BCP 47 tag</lc></ps>
  *            (in as many writes as needed; the phone sends what changed;
  *            <bed>, the phone's Bedtime mode, from capabilities version 2,
  *            for a phone that can tell: Android lets no app read it, so
@@ -136,6 +137,12 @@ public:
     static constexpr const char *TheaterKey = "/org/asteroidos/modes/theater";
     // the phone's DND starts the watch's Bedtime (default) or its DND
     static constexpr const char *PhoneDndBedtimeKey = "/org/asteroidos/modes/phone-dnd-bedtime";
+    // The phone's language as a BCP 47 tag ("en-NZ", string; <lc> in the
+    // status, at connect and when the phone changes it); not set until it said
+    static constexpr const char *PhoneLocaleKey = "/org/asteroidos/settings/phone-locale";
+    // A BCP 47 tag as the phone sends it: language, then subtags of 1-8
+    // letters or digits, at most 35 characters (the settings only compare it)
+    static bool validLocaleTag(const QString &tag);
     // the watch's changes are sent once they settle (the switch between
     // DND and Bedtime is two dconf writes)
     static const int QuietSettleMs = 250;

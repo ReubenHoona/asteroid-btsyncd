@@ -84,12 +84,23 @@
 #define WEAT_MINT_UUID    "00008003-0000-0000-0000-00A57E401D05"
 #define WEAT_MAXT_UUID    "00008004-0000-0000-0000-00A57E401D05"
 #define WEAT_LOC_UUID     "00008005-0000-0000-0000-00A57E401D05"
+// The full forecast (JSON, see weatherservice.h) and what the watch can take
+#define WEAT_EXT_UUID     "00008006-0000-0000-0000-00A57E401D05"
+#define WEAT_CAPS_UUID    "00008007-0000-0000-0000-00A57E401D05"
 
 // dconf (bool, default false): notifications about the phone's connection (the
 // transient "Connected"/"Disconnected" banners and the "Phone disconnected" card
 // after a minute). Off like Wear OS, which shows only the state (the launcher's
 // phone toggle and its cross)
 #define CONNECTION_NOTICES_KEY "/org/asteroidos/btsyncd/connection-notices"
+
+// The standard Heart Rate Service ("Share heart rate", heartrateservice.h)
+#define HRS_UUID          "0000180d-0000-1000-8000-00805f9b34fb"
+#define HRS_MEASURE_UUID  "00002a37-0000-1000-8000-00805f9b34fb"
+#define HRS_LOCATION_UUID "00002a38-0000-1000-8000-00805f9b34fb"
+// dconf (bool, default false): the quick panel's "Share heart rate" toggle
+#define SHARE_HEART_RATE_KEY "/org/asteroidos/btsyncd/share-heart-rate"
+#define BTSYNCD_MESSAGES_PATH        "/org/asteroidos/btsyncd/messages"
 
 #define BATTERY_UUID      "0000180F-0000-1000-8000-00805f9b34fb"
 #define BATTERY_LVL_UUID  "00002a19-0000-1000-8000-00805f9b34fb"

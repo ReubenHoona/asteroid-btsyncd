@@ -30,6 +30,8 @@ set(
 	assistantservice.cpp
 	contactnames.cpp
 	voicecond.cpp
+	messageservice.cpp
+	heartrateservice.cpp
 )
 set(
 	HEADERS
@@ -63,6 +65,8 @@ set(
 	phonestatusservice.h
 	assistantprotocol.h
 	assistantservice.h
+	messageservice.h
+	heartrateservice.h
 )
 
 add_executable(asteroid-btsyncd ${SRC} ${HEADERS})
@@ -83,6 +87,12 @@ if(MKCAL_FOUND AND KCALCORE_FOUND)
 	target_sources(asteroid-btsyncd PRIVATE calendarservice.cpp calendarservice.h)
 	target_compile_definitions(asteroid-btsyncd PRIVATE BTSYNCD_HAVE_CALENDAR)
 	target_link_libraries(asteroid-btsyncd PRIVATE PkgConfig::MKCAL PkgConfig::KCALCORE)
+endif()
+
+# The watch's heart rate sensor for "Share heart rate"
+if(Qt6Sensors_FOUND)
+	target_compile_definitions(asteroid-btsyncd PRIVATE BTSYNCD_HAVE_SENSORS)
+	target_link_libraries(asteroid-btsyncd PRIVATE Qt6::Sensors)
 endif()
 
 # The microphone for voice replies (without it only WAV test sources work)

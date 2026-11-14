@@ -38,9 +38,8 @@ static const int ForgetMs = 30000;
 // When the phone's writes carry no mtu option (BlueZ < 5.62): the smallest
 static const int AssumedMtu = 23;
 // An action's result: directions and contacts come in a second or two; a
-// text message once the phone's network took it (Gadgetbridge waits up to 20 s)
-static const int ActResultMs = 15000;
-static const int SmsResultMs = 40000;
+// text message once the phone's network took it (Gadgetbridge waits up to
+// 20 s); see AssistantProtocol::actTimeoutMs for each action
 
 static int optionMtu(const QVariantMap &options)
 {
@@ -62,9 +61,10 @@ public slots:
         mBuffer += value;
         for (;;) {
             // an answer or status ends with </asr>, an action's result with
-            // </acr>, a part of the contact names with </cn>
+            // </acr>, a part of the contact names with </cn>, a phone event
+            // with </pe>
             int end = -1, tag = 0;
-            for (const char *t : {"</asr>", "</acr>", "</cn>"}) {
+            for (const char *t : {"</asr>", "</acr>", "</cn>", "</pe>"}) {
                 const int at = mBuffer.indexOf(t);
                 if (at >= 0 && (end < 0 || at < end)) {
                     end = at;
@@ -148,14 +148,25 @@ AssistantDBusApi::AssistantDBusApi(AssistantService *service) : QObject(service)
 {
     connect(service, &AssistantService::answered, this, &AssistantDBusApi::Answer);
     connect(service, &AssistantService::failed, this, &AssistantDBusApi::Failed);
-    connect(service, &AssistantService::actResult, this, &AssistantDBusApi::ActResult);
+    connect(service, &AssistantService::actResult, this, &AssistantDBusApi::onActResult);
+    connect(service, &AssistantService::phoneEvent, this, &AssistantDBusApi::PhoneEvent);
+}
+
+void AssistantDBusApi::onActResult(uint id, const QString &json)
+{
+    // btsyncd's own actions are answered to their own callers
+    if (id < AssistantService::InternalIdBase)
+        emit ActResult(id, json);
 }
 
 bool AssistantDBusApi::Available() { return mService->available(); }
 bool AssistantDBusApi::Ask(uint id, const QString &request) { return mService->ask(id, request.toUtf8()); }
 bool AssistantDBusApi::Cancel(uint id) { return mService->cancel(id); }
 QStringList AssistantDBusApi::Actions() { return mService->actions(); }
-bool AssistantDBusApi::Act(uint id, const QString &json) { return mService->act(id, json.toUtf8()); }
+bool AssistantDBusApi::Act(uint id, const QString &json)
+{
+    return id < AssistantService::InternalIdBase && mService->act(id, json.toUtf8());
+}
 bool AssistantDBusApi::CancelAct(uint id) { return mService->cancelAct(id); }
 
 AssistantService::AssistantService(int index, QDBusConnection bus, NotificationService *notifications, QObject *parent)
@@ -235,7 +246,7 @@ bool AssistantService::act(uint id, const QByteArray &json)
             mRequests->send(AssistantProtocol::actCancelXml(id), mMtu);
         endAct(id, QStringLiteral("{\"ok\":false,\"er\":\"timeout\"}"));
     });
-    t->start(a == QLatin1String("sms") ? SmsResultMs : ActResultMs);
+    t->start(AssistantProtocol::actTimeoutMs(a));
     mActs.insert(id, t);
     mRequests->send(AssistantProtocol::actXml(id, json), mMtu);
     // the action's kind only: no place, name or message in the log
@@ -275,6 +286,17 @@ void AssistantService::onReply(const QByteArray &xml, int mtu)
     }
     if (r.names) {
         onNames(r);
+        return;
+    }
+    if (r.event) {
+        // only the kinds the capabilities list, and a JSON object
+        if (!AssistantProtocol::eventKinds().contains(r.eventKind)
+            || !QJsonDocument::fromJson(r.eventJson.toUtf8()).isObject()) {
+            qWarning() << "Assistant: a phone event that is not one of ours, dropped";
+            return;
+        }
+        qDebug() << "Assistant: phone event" << r.eventKind << r.eventJson.size() << "bytes";
+        emit phoneEvent(r.eventKind, r.eventJson);
         return;
     }
     if (r.act) {

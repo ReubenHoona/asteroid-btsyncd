@@ -20,6 +20,7 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QList>
 #include <QSet>
 #include <QString>
 
@@ -38,17 +39,38 @@ class CalendarStore;
  *     adds or replaces event ID (START, END: seconds since the epoch, UTC;
  *     all-day: START is midnight UTC of the first day, END of the day after
  *     the last)
+ *   Capabilities version 2 (Gadgetbridge since W2-gb-data) adds, all optional
+ *   and each left out when unknown, to <ev>:
+ *     <co>AARRGGBB</co>  the event's colour, else its calendar's (6 digits: opaque)
+ *     <rs>N</rs>         the user's response: 0 needs action, 1 accepted,
+ *                        2 tentative, 3 declined
+ *     <or>ORGANIZER</or> who organises it
+ *     <rm>10,30</rm>     reminders, minutes before the start (at most five)
+ *     <ei>N</ei>         the phone's own event id when it is not <id>
+ *   They are kept on the mkcal event as custom properties X-EOS-COLOR (the
+ *   8 hex digits, lower case), X-EOS-RSVP (0..3), X-EOS-ORGANIZER,
+ *   X-EOS-CALENDAR (<cn>), X-EOS-EVENTID (<ei>, else <id>: what the watch
+ *   sends back in the rsvp and open actions), and the reminders as alarms of
+ *   type display with the start offset, stored disabled (nothing on the
+ *   watch schedules them, so they add no notification and no wake). A
+ *   property the phone no longer sends is removed from the event.
  *   <del><id>ID</id></del>      removes event ID
  *   <sync>begin</sync> ... <sync>end</sync>
  *     a full sync: at the end, the phone's events not sent since the begin
  *     are removed
  *   <clear/>                    removes all the phone's events
- * Capabilities characteristic (read): <capabilities><version>1</version></capabilities>
+ * Capabilities characteristic (read): <capabilities><version>2</version></capabilities>
  */
 struct CalendarEventData {
     QString id, title, location, description, calendar;
     QDateTime start, end;
     bool allDay = false;
+    // version 2
+    QString color;              // "aarrggbb", empty: not sent
+    int response = -1;          // 0..3, -1: not sent
+    QString organizer;
+    QList<int> reminders;       // minutes before the start, at most five
+    QString eventId;            // <ei>, empty: the same as id
 };
 
 class CalendarService : public Service
@@ -63,6 +85,19 @@ public:
 
     // Parses <ev>...</ev>; false if it has no id or no valid start
     static bool parseEvent(const QByteArray &xml, CalendarEventData *event);
+    // "ff3fa9f5", "FF3FA9F5" or "3fa9f5" -> "ff3fa9f5"; empty when it is not a colour
+    static QString normalizeColor(const QString &text);
+    // "10,30,x,-5,10" -> (10, 30): whole minutes 0..40320, no repeats, at most five
+    static QList<int> parseReminders(const QString &text);
+
+    // The custom properties on an event (the calendar app reads these)
+    static constexpr const char *PropColor = "X-EOS-COLOR";
+    static constexpr const char *PropResponse = "X-EOS-RSVP";
+    static constexpr const char *PropOrganizer = "X-EOS-ORGANIZER";
+    static constexpr const char *PropCalendar = "X-EOS-CALENDAR";
+    static constexpr const char *PropEventId = "X-EOS-EVENTID";
+    static const int MaxReminders = 5;
+    static const int MaxReminderMinutes = 40320;
 
 private:
     void scheduleSave();
