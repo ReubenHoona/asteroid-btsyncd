@@ -27,6 +27,7 @@
 #include <QVariant>
 
 #include "callcontrol.h"
+#include "callobserver.h"
 #include "service.h"
 
 class BatteryStatus;
@@ -56,6 +57,10 @@ struct PhoneNotification
     // The phone notification's identity (a hash of Android's notification key): the
     // same card whatever phone id it comes with
     QString key;
+    // <cv>KEY</cv> of a message (CR-52): the key the messages API (the act convs) uses for the
+    // conversation, "t<thread id>" or "n<hash>"; "" without or when it is not such a key. The card
+    // gets it as the hint x-asteroid-conversation (CR-54)
+    QString conversation;
     QList<QPair<QString, QString>> messages;   // sender, text; oldest first
     // Which of the messages are the user's own (<me>1</me> in an <m>, phones that know
     // the watch's <me> capability): the same length as messages
@@ -293,6 +298,9 @@ public:
     static constexpr const char *PhoneIdHint = "x-asteroid-phone-id";
     // Version 4: the conversation's key, and the Android category
     static constexpr const char *ThreadHint = "x-asteroid-thread";
+    // The conversation's key in the messages API (CR-54), from <cv>: the launcher opens the
+    // Messages app on that conversation
+    static constexpr const char *ConversationHint = "x-asteroid-conversation";
     static constexpr const char *KeyHint = "x-asteroid-phone-key";
     static constexpr const char *CategoryHint = "x-asteroid-category";
     // The conversation's messages for the full view (PhoneNotification::messagesJson)
@@ -500,6 +508,8 @@ public:
     // phone, the audio stays there. Without it, or for a call it does not know, the action
     // goes to the phone as before.
     void setCallControl(CallControl *calls) { mCallControl = calls; }
+    // Who keeps the call log (CallLog): told about the phone's call cards, from the frames only
+    void setCallObserver(CallObserver *observer) { mCallObserver = observer; }
     // After the link is back: the phone has set itself up again by then (service
     // discovery, its subscriptions): queued dismissals are sent
     static const int PhoneSetupMs = 5000;
@@ -606,6 +616,7 @@ private:
     QHash<QString, qint64> mCallersSeen;
     QHash<uint, QStringList> mPhoneActions;
     CallControl *mCallControl = nullptr;
+    CallObserver *mCallObserver = nullptr;
     QHash<uint, QList<QVariant>> mCallNotify;
     QHash<uint, QString> mTimestamps;
     QDBusServiceWatcher *mLipstickWatcher = nullptr;

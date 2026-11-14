@@ -28,6 +28,8 @@
 #include <QJsonObject>
 #include <QDebug>
 
+#include <MDConfItem>
+
 // Requests are a system prompt and a question, about 1 kB; replies a
 // sentence or two
 static const int MaxRequestSize = 8192;
@@ -195,6 +197,43 @@ AssistantService::AssistantService(int index, QDBusConnection bus, NotificationS
     if (!session.registerObject(QStringLiteral(BTSYNCD_ASSISTANT_PATH), mApi,
                                 QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals))
         fprintf(stderr, "AssistantService: cannot register %s on the session bus\n", BTSYNCD_ASSISTANT_PATH);
+
+    // The Weather app's refresh button (CR-40): a change of the key, no polling
+    mWeatherRefresh = new MDConfItem(QStringLiteral("/org/asteroidos/weather/refresh-request"), this);
+    connect(mWeatherRefresh, &MDConfItem::valueChanged, this, &AssistantService::onWeatherRefreshRequest);
+}
+
+bool AssistantService::relayAct(const QByteArray &json, const std::function<void(const QString &)> &done)
+{
+    uint id = 0;
+    do {
+        id = RelayIdBase + (++mRelayCounter & 0x0fffffffu);
+    } while (mActs.contains(id));
+    if (!act(id, json))
+        return false;
+    if (done)
+        mDone.insert(id, done);
+    return true;
+}
+
+void AssistantService::onWeatherRefreshRequest()
+{
+    // only while a phone that does it is connected (actions() is empty otherwise); the watch's
+    // own weather source takes over when none is (eos-weather)
+    if (!actions().contains(QStringLiteral("wxrefresh"))) {
+        qInfo() << "Weather: a refresh was asked for, no phone that does it is connected";
+        return;
+    }
+    if (mWeatherRefreshing)
+        return;
+    mWeatherRefreshing = true;
+    const bool sent = relayAct(QByteArrayLiteral("{\"a\":\"wxrefresh\"}"), [this](const QString &json) {
+        mWeatherRefreshing = false;
+        const bool ok = QJsonDocument::fromJson(json.toUtf8()).object().value(QStringLiteral("ok")).toBool();
+        qInfo() << "Weather: the phone's refresh" << (ok ? "was done" : "failed");
+    });
+    if (!sent)
+        mWeatherRefreshing = false;
 }
 
 bool AssistantService::available() const
@@ -259,6 +298,7 @@ bool AssistantService::cancelAct(uint id)
     QTimer *t = mActs.take(id);
     if (!t)
         return false;
+    mDone.remove(id);
     t->deleteLater();
     if (mRequests->notifying())
         mRequests->send(AssistantProtocol::actCancelXml(id), mMtu);
@@ -273,6 +313,9 @@ void AssistantService::endAct(uint id, const QString &json)
     t->stop();
     t->deleteLater();
     emit actResult(id, json);
+    const auto done = mDone.take(id);
+    if (done)
+        done(json);
 }
 
 void AssistantService::onReply(const QByteArray &xml, int mtu)

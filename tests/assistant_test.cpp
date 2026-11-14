@@ -117,6 +117,15 @@ int main(int argc, char **argv)
     // how long each action waits for the phone: the passwords' 120 s plus 5, a text 40, the lists 20, the rest 15
     check(actTimeoutMs("wifipw") == 125000 && actTimeoutMs("msend") == 40000 && actTimeoutMs("sms") == 40000
           && actTimeoutMs("convs") == 20000 && actTimeoutMs("msgs") == 20000, "act timeouts: wifipw, msend, sms, convs, msgs");
+    // CR-50: the phone's lists, a contact's card and photo are 20 s as well, the other new acts 15 s
+    check(actTimeoutMs("clist") == 20000 && actTimeoutMs("cnums") == 20000 && actTimeoutMs("cinfo") == 20000
+          && actTimeoutMs("cphoto") == 20000, "act timeouts: clist, cnums, cinfo, cphoto 20 s");
+    check(actTimeoutMs("dial") == 15000 && actTimeoutMs("cstar") == 15000 && actTimeoutMs("cdel") == 15000
+          && actTimeoutMs("wxrefresh") == 15000 && actTimeoutMs("cvol") == 15000 && actTimeoutMs("nav") == 15000
+          && actTimeoutMs("open") == 15000 && actTimeoutMs("call") == 15000 && actTimeoutMs("hangup") == 15000,
+          "act timeouts: dial, cstar, cdel, wxrefresh, cvol, nav, open, call, hangup 15 s");
+    check(actTimeoutMs("wifipw") == 125000 && actTimeoutMs("msend") == 40000 && actTimeoutMs("sms") == 40000,
+          "act timeouts: wifipw 125 s, msend and sms 40 s");
     check(actTimeoutMs("rsvp") == 15000 && actTimeoutMs("open") == 15000 && actTimeoutMs("mread") == 15000
           && actTimeoutMs("cam") == 15000 && actTimeoutMs("nav") == 15000 && actTimeoutMs("contacts") == 15000
           && actTimeoutMs("call") == 15000 && actTimeoutMs("hangup") == 15000 && actTimeoutMs("anything") == 15000,

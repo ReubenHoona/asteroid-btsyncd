@@ -59,6 +59,11 @@ class CalendarStore;
  *     a full sync: at the end, the phone's events not sent since the begin
  *     are removed
  *   <clear/>                    removes all the phone's events
+ *   <un>EPOCH</un>              right after <sync>end</sync> (CR-55, Gadgetbridge since FP-G1): the
+ *                               end of the window the phone synced, seconds since the epoch (ms are
+ *                               taken too). It goes to dconf /org/asteroidos/calendar/synced-until
+ *                               (x, 0 = unknown), which the Calendar app reads. An older btsyncd
+ *                               ignores the element, an older phone does not send it
  * Capabilities characteristic (read): <capabilities><version>2</version></capabilities>
  */
 struct CalendarEventData {
@@ -105,6 +110,8 @@ private:
     CalendarStore *mStore = nullptr;
     QTimer *mSaveTimer = nullptr;
     bool mSyncing = false;
+    // <sync>end</sync> was the last element: an <un> may follow (CR-55)
+    bool mUntilNext = false;
     QSet<QString> mSynced;
 };
 

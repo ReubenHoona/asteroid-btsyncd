@@ -44,6 +44,9 @@
 #include <QDBusServiceWatcher>
 #include <QDBusVariant>
 #include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPointer>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -273,8 +276,9 @@ QVariantMap CallAudio::state() const
     map.insert("available", watch);
     map.insert("muted", mMuted);
     map.insert("route", watch ? QStringLiteral("watch") : QStringLiteral("phone"));
-    map.insert("volume", watch ? volumeStep() : -1);
-    map.insert("volumeMax", watch ? int(VolumeMax) : 0);
+    // the phone's own call volume while the call is on the phone (cvol), else the watch's step
+    map.insert("volume", watch ? volumeStep() : mPhoneVolume);
+    map.insert("volumeMax", watch ? int(VolumeMax) : mPhoneVolumeMax);
     map.insert("callState", mCalls.value(mainCall()).state);
     map.insert("link", available());
     return map;
@@ -640,7 +644,7 @@ void CallAudio::muteMicrophone(bool muted)
 bool CallAudio::adjustVolume(int delta)
 {
     if (!onWatch())
-        return false;
+        return adjustPhoneVolume(delta);
     const int step = qBound(1, volumeStep() + delta, int(VolumeMax));
     mVolumePct = step * 100 / VolumeMax;
     mCallVolume->set(mVolumePct);
@@ -689,9 +693,65 @@ void CallAudio::pactl(const QString &args)
     QProcess::startDetached(cmd, list);
 }
 
+bool CallAudio::adjustPhoneVolume(int delta)
+{
+    if (delta == 0 || !mRelay || !mRelay->relayHas(QStringLiteral("cvol")))
+        return false;
+    mPhoneVolumeDelta = qBound(-VolumeMax, mPhoneVolumeDelta + delta, int(VolumeMax));
+    sendPhoneVolume();
+    return true;
+}
+
+// One act at a time, one step each (the act steps by 1): the crown's detents that come while it
+// is on its way are sent as it answers
+void CallAudio::sendPhoneVolume()
+{
+    if (mPhoneVolumeBusy || mPhoneVolumeDelta == 0 || !mRelay)
+        return;
+    const int step = mPhoneVolumeDelta > 0 ? 1 : -1;
+    mPhoneVolumeDelta -= step;
+    mPhoneVolumeBusy = true;
+    const QPointer<CallAudio> self(this);
+    const bool sent = mRelay->relayAct(QByteArrayLiteral("{\"a\":\"cvol\",\"d\":") + QByteArray::number(step) + '}',
+                                       [self](const QString &json) {
+        if (!self)
+            return;
+        self->mPhoneVolumeBusy = false;
+        self->onPhoneVolume(json);
+        self->sendPhoneVolume();
+    });
+    if (!sent) {
+        mPhoneVolumeBusy = false;
+        mPhoneVolumeDelta = 0;
+    }
+}
+
+void CallAudio::onPhoneVolume(const QString &json)
+{
+    const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+    const int v = o.value(QStringLiteral("v")).toInt(-1);
+    const int max = o.value(QStringLiteral("max")).toInt(0);
+    if (!o.value(QStringLiteral("ok")).toBool() || max < 1 || max > 100 || v < 0 || v > max) {
+        // a refusal or a timeout: the steps still waiting are dropped
+        mPhoneVolumeDelta = 0;
+        return;
+    }
+    mPhoneVolume = v;
+    mPhoneVolumeMax = max;
+    qInfo() << "CallAudio: the phone's call volume" << v << "of" << max;
+    changed();
+}
+
 void CallAudio::setPhoneLink(bool connected)
 {
     mPhoneLink = connected;
+    // the phone's volume is the phone's: not kept across its absence
+    if (!connected && (mPhoneVolume >= 0 || mPhoneVolumeMax > 0)) {
+        mPhoneVolume = -1;
+        mPhoneVolumeMax = 0;
+        mPhoneVolumeDelta = 0;
+        changed();
+    }
     scheduleConnect(true);
 }
 

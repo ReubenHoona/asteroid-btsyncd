@@ -14,6 +14,7 @@
 #include <QVariantMap>
 
 #include "callcontrol.h"
+#include "phonerelay.h"
 #include "common.h"
 
 class CallAudio;
@@ -36,6 +37,12 @@ class QDBusServiceWatcher;
  *   SetMuted(b), AdjustVolume(i delta), SendTones(s), SetRoute(s),
  *   PullToWatch()
  * Each method answers whether it did something.
+ *
+ * A call that is on the phone (the watch does not hold its audio) has no volume of the
+ * watch's: AdjustVolume then asks the phone to step its voice-call volume (the act cvol,
+ * CR-49: {"a":"cvol","d":+1|-1} -> {"ok":true,"v":N,"max":M}), and State carries the
+ * volume and volumeMax of the phone's reply while "available" stays false (no Mute; the
+ * launcher's crown arc and Volume screen work from the numbers).
  */
 class CallAudioDBusApi : public QObject
 {
@@ -86,6 +93,8 @@ public:
     // The phone's Bluetooth LE link (BlueZManager): with it up, the watch
     // connects the hands-free link as stock keeps it connected
     void setPhoneLink(bool connected);
+    // The assistant relay, for the phone's call volume (the act cvol)
+    void setPhoneRelay(PhoneRelay *relay) { mRelay = relay; }
 
 signals:
     void stateChanged(const QVariantMap &state);
@@ -126,7 +135,15 @@ private:
     QTimer mConnectTimer;
     int mConnectDelay = 0, mConnectTries = 0;
     QVariantMap mLast;
+    // The phone's call volume (the reply of the act cvol): unknown -1 / 0; the steps asked
+    // for while an act is on its way are joined into the next one
+    PhoneRelay *mRelay = nullptr;
+    int mPhoneVolume = -1, mPhoneVolumeMax = 0, mPhoneVolumeDelta = 0;
+    bool mPhoneVolumeBusy = false;
 
+    bool adjustPhoneVolume(int delta);
+    void sendPhoneVolume();
+    void onPhoneVolume(const QString &json);
     void setModem(const QString &path, const QVariantMap &properties);
     void clearModem();
     void watchModemInterfaces();

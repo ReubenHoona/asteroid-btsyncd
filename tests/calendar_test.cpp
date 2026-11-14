@@ -14,6 +14,7 @@
 #include "common.h"
 #include "fixtures.h"
 
+#include <MDConfItem>
 #include <QCoreApplication>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -275,6 +276,52 @@ int main(int argc, char **argv)
         const auto events = readBack();
         CHECK(events.size() == 1);
         CHECK(events.contains(uid("104")));
+    }
+
+    // CR-55: the end frame Gadgetbridge writes, <sync>end</sync><un>EPOCH</un> (two elements in one
+    // write), sets /org/asteroidos/calendar/synced-until; the old frame still works and leaves the key
+    {
+        MDConfItem until(QStringLiteral("/org/asteroidos/calendar/synced-until"));
+        until.unset();
+        spin(300);
+        const auto untilIs = [&until](qint64 v) {
+            QElapsedTimer t;
+            t.start();
+            while(until.value(0).toLongLong() != v && t.elapsed() < 3000)
+                spin(50);
+            return until.value(0).toLongLong() == v;
+        };
+        CHECK(untilIs(0));
+        // the old frame: the sync ends as before, the key stays unset (0 = unknown)
+        write(driver, "<sync>begin</sync><ev><id>104</id><ti>Dentist</ti><st>" + QByteArray::number(t0 + 86400) + "</st></ev>");
+        write(driver, "<sync>end</sync>");
+        spin(400);
+        CHECK(untilIs(0));
+        CHECK(readBack().contains(uid("104")));
+        // the frame Gadgetbridge records (FP-G1): the last frame of the fixture
+        const QList<QByteArray> frames = fixtureFrames("calendar-events-v2.frames.txt");
+        CHECK(frames.value(5).contains("<sync>end</sync><un>1793800000</un>"));
+        write(driver, "<sync>begin</sync>");
+        write(driver, frames.value(5));
+        CHECK(untilIs(1793800000));
+        // milliseconds are taken as seconds
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<sync>end</sync><un>1793900000000</un>");
+        CHECK(untilIs(1793900000));
+        // a value that is not a time, or an <un> that does not follow an end, changes nothing
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<sync>end</sync><un>soon</un>");
+        spin(300);
+        CHECK(untilIs(1793900000));
+        write(driver, "<un>1794000000</un>");
+        spin(300);
+        CHECK(untilIs(1793900000));
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<sync>end</sync><clear/><un>1794000000</un>");
+        spin(300);
+        CHECK(untilIs(1793900000));
+        until.unset();
+        spin(200);
     }
 
     // Clear

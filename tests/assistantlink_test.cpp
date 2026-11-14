@@ -24,6 +24,7 @@
 #include "notificationservice.h"
 #include "common.h"
 
+#include <MDConfItem>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -391,6 +392,60 @@ int main(int argc, char **argv)
     CHECK(waitFor([&] { return QFile::exists(namesFile); }));
     CHECK(ContactNames::remove("test: unpaired"));
     CHECK(!QFile::exists(namesFile) && !ContactNames::remove("again"));
+
+    /* FP-B2, CR-40: the Weather app's refresh button (dconf weather/refresh-request) asks the phone for a
+       forecast over the act wxrefresh, only while a phone that lists it is connected */
+    {
+        MDConfItem req(QStringLiteral("/org/asteroidos/weather/refresh-request"));
+        req.unset();
+        spin(300);
+        qlonglong stamp = 1793200000000LL;
+        const auto actCount = [&collector] { return collector.requests.count("<act>"); };
+        // a phone that does not list wxrefresh: a press changes nothing
+        writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms</ac></asr>");
+        collector.requests.clear();
+        req.set(++stamp);
+        spin(600);
+        CHECK(actCount() == 0);
+        // a phone that lists it: the act goes out, exactly the request Gadgetbridge records (FP-G2)
+        writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms,wxrefresh</ac></asr>");
+        collector.results.clear();
+        req.set(++stamp);
+        CHECK(waitFor([&] { return actCount() == 1 && collector.requests.endsWith("</act>"); }));
+        CHECK(collector.requests.contains("<js>{&quot;a&quot;:&quot;wxrefresh&quot;}</js>")
+              || collector.requests.contains("<js>{\"a\":\"wxrefresh\"}</js>"));
+        // the id is btsyncd's own (not one of the session bus callers')
+        const int idAt = collector.requests.indexOf("<act><id>") + 9;
+        const uint actId = collector.requests.mid(idAt, collector.requests.indexOf("</id>", idAt) - idAt).toUInt();
+        CHECK(actId >= AssistantService::InternalIdBase);
+        // a second press while the phone has not answered: not sent again
+        req.set(++stamp);
+        spin(600);
+        CHECK(actCount() == 1);
+        // the phone answers (no ActResult goes to the session bus for an id of ours); the next press goes out
+        writeReply(driver, "<acr><id>" + QByteArray::number(actId) + "</id><js>{&quot;ok&quot;:true}</js></acr>");
+        spin(300);
+        CHECK(collector.results.isEmpty());
+        collector.requests.clear();
+        req.set(++stamp);
+        CHECK(waitFor([&] { return actCount() == 1; }));
+        // the phone leaves (the act waiting ends, nothing goes while it is away)
+        notifications.setLinkConnected(false);
+        spin(300);
+        collector.requests.clear();
+        req.set(++stamp);
+        spin(600);
+        CHECK(actCount() == 0);
+        // back, and listing it: works again (the end of the waiting act cleared the "waiting" state)
+        notifications.setLinkConnected(true);
+        spin(200);
+        writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms,wxrefresh</ac></asr>");
+        collector.requests.clear();
+        req.set(++stamp);
+        CHECK(waitFor([&] { return actCount() == 1; }));
+        req.unset();
+        spin(200);
+    }
 
     if (failures)
         fprintf(stderr, "%d check(s) failed\n", failures);

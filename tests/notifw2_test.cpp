@@ -20,6 +20,7 @@
  *   - the find-my-watch alert
  */
 
+#include "calllog.h"
 #include "notificationservice.h"
 #include "common.h"
 #include "frames.h"
@@ -37,6 +38,7 @@
 #include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QVariantMap>
 #include <cstdio>
@@ -987,6 +989,106 @@ int main(int argc, char **argv)
         blocked.unset();
         known.unset();
         spin(300);
+    }
+
+    // ---- FP-B2, CR-52/CR-54: <cv> of a message becomes the hint x-asteroid-conversation (the frame
+    // Gadgetbridge records, FP-G1); a card without <cv> or with something that is not a key has none
+    {
+        const QList<QByteArray> g1 = loadFrames("notification-fp-g1");
+        // the ringing call (starred, plain), the message, and the calendar end frame (calendar_test's)
+        CHECK(g1.size() == 4);
+        CHECK(QByteArray(NotificationService::ConversationHint) == "x-asteroid-conversation");
+        write(driver, g1.value(2));
+        CHECK(next());
+        CHECK(lastPosted(fake).hints.value("x-asteroid-conversation").toString() == "nb18490de9277fdf6");
+        CHECK(lastPosted(fake).hints.value("x-asteroid-thread").toString() == "b18490de9277fdf6");
+        write(driver, "<insert><id>171</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Sam</su><bo>x</bo><th>17</th><cv>t17</cv></insert>");
+        CHECK(next());
+        CHECK(lastPosted(fake).hints.value("x-asteroid-conversation").toString() == "t17");
+        write(driver, "<insert><id>172</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Sam</su><bo>x</bo><th>18</th><cv>x 17!</cv></insert>");
+        CHECK(next());
+        CHECK(!lastPosted(fake).hints.contains("x-asteroid-conversation"));
+        write(driver, "<insert><id>173</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Sam</su><bo>x</bo><th>19</th><cv>" + QByteArray(80, 't') + "</cv></insert>");
+        CHECK(next());
+        CHECK(!lastPosted(fake).hints.contains("x-asteroid-conversation"));
+        write(driver, "<insert><id>174</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><su>Sam</su><bo>x</bo><th>20</th></insert>");
+        CHECK(next());
+        CHECK(!lastPosted(fake).hints.contains("x-asteroid-conversation"));
+        // the old frames (no <cv>) are as before
+        write(driver, frames.value(1));
+        CHECK(next());
+        CHECK(!lastPosted(fake).hints.contains("x-asteroid-conversation"));
+    }
+
+    // ---- FP-B2, CR-08: the phone's call cards reach the call log (calllog.h) through the real frames
+    {
+        QTemporaryDir ldir;
+        CallLog calls(ldir.path() + "/calllog.json", QDBusConnection::connectToBus(QDBusConnection::SessionBus, "calllog"));
+        service.setCallObserver(&calls);
+        const QList<QByteArray> g1 = loadFrames("notification-fp-g1");
+        const auto log = [&calls]() { return QJsonDocument::fromJson(calls.Entries().toUtf8()).array(); };
+        // ringing (the frame Gadgetbridge records), then answered: the ringing card goes, the card of the
+        // call in progress comes (what onSetCallState sends), the call ends
+        write(driver, g1.value(0));
+        CHECK(next());
+        CHECK(log().isEmpty());
+        write(driver, "<removed><id>13829704</id></removed>");
+        spin(200);
+        write(driver, "<insert><id>13829705</id><vb>none</vb><an>Ongoing call</an><ai>ios-call-outline</ai><su>Alex Example</su><bo>+15550100</bo><ac>end</ac></insert>");
+        CHECK(next());
+        spin(200);
+        CHECK(log().isEmpty());                              // answered, not missed
+        write(driver, "<removed><id>13829705</id></removed>");
+        CHECK(waitFor([&] { return log().size() == 1; }));
+        {
+            const QJsonObject e = log().at(0).toObject();
+            CHECK(e.value("ty").toString() == "in" && e.value("n").toString() == "Alex Example" && e.value("nm").toString() == "+15550100");
+        }
+        // ringing, gone: missed
+        write(driver, "<insert><id>13829710</id><vb>ringtone</vb><an>Incoming call notification</an><su>Sam Carter</su><bo>+15550102</bo><ac>answer,reject,silence,reply</ac></insert>");
+        CHECK(next());
+        write(driver, "<removed><id>13829710</id></removed>");
+        CHECK(waitFor([&] { return log().size() == 2; }));
+        CHECK(log().at(0).toObject().value("ty").toString() == "missed");
+        // ringing, Decline pressed on the watch (the card's button), gone: declined
+        write(driver, "<insert><id>13829711</id><vb>ringtone</vb><an>Incoming call notification</an><su>Bob</su><bo>+15550103</bo><ac>answer,reject</ac></insert>");
+        CHECK(next());
+        emitActionInvoked(fakeConn, newestId(fake), "reject");
+        spin(300);
+        write(driver, "<removed><id>13829711</id></removed>");
+        CHECK(waitFor([&] { return log().size() == 3; }));
+        CHECK(log().at(0).toObject().value("ty").toString() == "declined");
+        // a call in progress that no ringing card led to: outgoing
+        write(driver, "<insert><id>13829712</id><vb>none</vb><an>Ongoing call</an><su>Bob</su><bo>+15550103</bo><ac>end</ac></insert>");
+        CHECK(next());
+        write(driver, "<removed><id>13829712</id></removed>");
+        CHECK(waitFor([&] { return log().size() == 4; }));
+        CHECK(log().at(0).toObject().value("ty").toString() == "out");
+        // the phone's missed-call notification (the card is a notification, not a call card): a new entry
+        const qint64 callAt = QDateTime::currentSecsSinceEpoch() - 600;
+        write(driver, "<insert><id>590801160</id><vb>normal</vb><an>Phone</an><ai>ios-call-outline</ai><su>Lena Okafor</su><bo>Missed call · Mobile</bo><ac>callback</ac><pr>4</pr><ca>missed_call</ca><wh>"
+                      + QByteArray::number(callAt) + "</wh></insert>");
+        CHECK(next());
+        CHECK(waitFor([&] { return log().size() == 5; }));
+        {
+            bool found = false;
+            for(const QJsonValue &v : log()) {
+                const QJsonObject e = v.toObject();
+                if(e.value("n").toString() == "Lena Okafor") {
+                    found = true;
+                    CHECK(e.value("ty").toString() == "missed" && e.value("lb").toString() == "Mobile");
+                    CHECK(qint64(e.value("t").toDouble()) == callAt * 1000);
+                }
+            }
+            CHECK(found);
+        }
+        // a VoIP app's call card is not a phone call
+        write(driver, "<insert><id>9001</id><vb>ringtone</vb><pn>org.example.voip</pn><an>Incoming call notification</an><su>Dana</su><bo>Messenger call</bo><ac>answer,reject</ac></insert>");
+        CHECK(next());
+        write(driver, "<removed><id>9001</id></removed>");
+        spin(300);
+        CHECK(log().size() == 5);
+        service.setCallObserver(nullptr);
     }
 
     // ---- The elements the phone does not send: nothing new in the hints

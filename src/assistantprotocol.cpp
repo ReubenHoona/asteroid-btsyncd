@@ -71,7 +71,9 @@ int actTimeoutMs(const QString &action)
         return 125000;
     if (action == QLatin1String("msend") || action == QLatin1String("sms"))
         return 40000;
-    if (action == QLatin1String("convs") || action == QLatin1String("msgs"))
+    // the phone's lists and a contact's card or photo (CR-50)
+    if (action == QLatin1String("convs") || action == QLatin1String("msgs") || action == QLatin1String("clist")
+        || action == QLatin1String("cnums") || action == QLatin1String("cinfo") || action == QLatin1String("cphoto"))
         return 20000;
     return 15000;
 }

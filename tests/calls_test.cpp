@@ -37,6 +37,8 @@
 #include <QDBusVariant>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QTemporaryDir>
@@ -299,6 +301,30 @@ public slots:
     }
 };
 
+// FP-B2: the assistant relay of the phone, as CallAudio sees it (PhoneRelay)
+class FakeRelay : public PhoneRelay
+{
+public:
+    QStringList listed;
+    QList<QByteArray> sent;
+    QList<std::function<void(const QString &)>> waiting;
+    bool relayHas(const QString &act) const override { return listed.contains(act); }
+    bool relayAct(const QByteArray &json, const std::function<void(const QString &)> &done) override
+    {
+        const QString a = QJsonDocument::fromJson(json).object().value("a").toString();
+        if (!listed.contains(a))
+            return false;
+        sent << json;
+        waiting << done;
+        return true;
+    }
+    void answer(const QString &json)
+    {
+        const auto done = waiting.takeFirst();
+        done(json);
+    }
+};
+
 static void spin(int ms)
 {
     QElapsedTimer t;
@@ -441,6 +467,79 @@ int main(int argc, char **argv)
     CHECK(api(driver, "SendTones", {QString("5")}).toBool() == false);
     CHECK(api(driver, "SetRoute", {QString("watch")}).toBool() == false);
     CHECK(api(driver, "PullToWatch").toBool() == false);
+
+    // FP-B2, CR-07 and CR-49 (calls-09): a call that is on the phone has the phone's volume. AdjustVolume
+    // asks the phone to step its voice-call volume (the act cvol, the request Gadgetbridge records in FP-G2),
+    // State carries volume and volumeMax of the reply and "available" stays false. No relay, or a phone that
+    // does not list cvol: refused, as before.
+    {
+        FakeRelay relay;
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == false);          // no relay set
+        callAudio.setPhoneRelay(&relay);
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == false);          // the phone does not list cvol
+        CHECK(relay.sent.isEmpty());
+        relay.listed = QStringList() << "cvol" << "nav";
+        CHECK(api(driver, "AdjustVolume", {0}).toBool() == false);          // no step
+        CHECK(relay.sent.isEmpty());
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == true);
+        CHECK(relay.sent.size() == 1 && relay.sent.value(0) == "{\"a\":\"cvol\",\"d\":1}");
+        {
+            const QVariantMap s = getState(driver);          // nothing known until the phone answers
+            CHECK(s.value("volume").toInt() == -1 && s.value("volumeMax").toInt() == 0 && s.value("available").toBool() == false);
+        }
+        collector.changes.clear();
+        relay.answer("{\"ok\":true,\"v\":3,\"max\":5}");
+        CHECK(waitFor([&] { return !collector.changes.isEmpty(); }));
+        {
+            const QVariantMap s = getState(driver);
+            CHECK(s.value("volume").toInt() == 3 && s.value("volumeMax").toInt() == 5);
+            CHECK(s.value("available").toBool() == false && s.value("route").toString() == "phone");
+            CHECK(s.value("muted").toBool() == false && s.value("callState").toString().isEmpty());
+        }
+        // the phone's own numbers, not the watch's five steps
+        relay.sent.clear();
+        CHECK(api(driver, "AdjustVolume", {-1}).toBool() == true);
+        CHECK(relay.sent.size() == 1 && relay.sent.value(0) == "{\"a\":\"cvol\",\"d\":-1}");
+        relay.answer("{\"ok\":true,\"v\":7,\"max\":15}");
+        CHECK(waitFor([&] { return getState(driver).value("volume").toInt() == 7; }));
+        CHECK(getState(driver).value("volumeMax").toInt() == 15);
+        // steps that come while an act is on its way go out one at a time as the phone answers
+        relay.sent.clear();
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == true);
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == true);
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == true);
+        CHECK(relay.sent.size() == 1);
+        relay.answer("{\"ok\":true,\"v\":8,\"max\":15}");
+        CHECK(relay.sent.size() == 2 && relay.sent.value(1) == "{\"a\":\"cvol\",\"d\":1}");
+        relay.answer("{\"ok\":true,\"v\":9,\"max\":15}");
+        CHECK(relay.sent.size() == 3);
+        relay.answer("{\"ok\":true,\"v\":10,\"max\":15}");
+        CHECK(relay.sent.size() == 3 && relay.waiting.isEmpty());
+        CHECK(waitFor([&] { return getState(driver).value("volume").toInt() == 10; }));
+        // a refusal or a timeout: the steps still waiting are dropped, the volume stays
+        relay.sent.clear();
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == true);
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == true);
+        relay.answer("{\"ok\":false,\"er\":\"timeout\"}");
+        CHECK(relay.sent.size() == 1 && relay.waiting.isEmpty());
+        spin(200);
+        CHECK(getState(driver).value("volume").toInt() == 10);
+        // an answer that is not a volume is not taken
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == true);
+        relay.answer("{\"ok\":true,\"v\":99,\"max\":15}");
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == true);
+        relay.answer("{\"ok\":true}");
+        spin(200);
+        CHECK(getState(driver).value("volume").toInt() == 10 && getState(driver).value("volumeMax").toInt() == 15);
+        // the phone leaves: its volume is not kept
+        callAudio.setPhoneLink(false);
+        CHECK(waitFor([&] { return getState(driver).value("volume").toInt() == -1; }));
+        CHECK(getState(driver).value("volumeMax").toInt() == 0);
+        // the relay refuses the act (the phone went between the check and the send): false
+        relay.listed.clear();
+        CHECK(api(driver, "AdjustVolume", {1}).toBool() == false);
+        callAudio.setPhoneRelay(nullptr);
+    }
 
     // oFono with the hands-free link to the phone
     QDBusConnection ofono = QDBusConnection::connectToBus(QDBusConnection::SessionBus, "fake-ofono");

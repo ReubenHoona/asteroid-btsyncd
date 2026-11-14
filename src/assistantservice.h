@@ -26,12 +26,16 @@
 #include <QString>
 #include <QTimer>
 
+#include <functional>
+
 #include "assistantprotocol.h"
 #include "characteristic.h"
 #include "contactnames.h"
+#include "phonerelay.h"
 #include "service.h"
 
 class AssistantService;
+class MDConfItem;
 class NotificationService;
 
 /* Watch to phone: the questions (notifications of D001, MTU-sized pieces) */
@@ -115,7 +119,7 @@ private:
     AssistantService *mService;
 };
 
-class AssistantService : public Service
+class AssistantService : public Service, public PhoneRelay
 {
     Q_OBJECT
 public:
@@ -132,8 +136,14 @@ public:
     bool act(uint id, const QByteArray &json);
     bool cancelAct(uint id);
 
+    // PhoneRelay: btsyncd's own acts with a callback (CallAudio's cvol, the weather refresh)
+    bool relayHas(const QString &act) const override { return actions().contains(act); }
+    bool relayAct(const QByteArray &json, const std::function<void(const QString &)> &done) override;
+
     // Action ids from here up belong to btsyncd's own users (MessageService)
     static const uint InternalIdBase = 0x40000000u;
+    // The ids of relayAct() are in a band of their own, above the Messages API's
+    static const uint RelayIdBase = InternalIdBase + 0x20000000u;
 
     // From the characteristics
     void onReply(const QByteArray &xml, int mtu);
@@ -150,6 +160,9 @@ private:
     // The phone is gone (unsubscribed, or its link dropped): what waits fails
     void phoneGone(const char *why);
     void endAct(uint id, const QString &json);
+    // The watch's Weather app asked for a fresh forecast (dconf weather/refresh-request, CR-40):
+    // the phone is asked over the act wxrefresh, while one is connected that does it
+    void onWeatherRefreshRequest();
     // A part of the phone's contact names, or "off" (contactnames.h)
     void onNames(const AssistantProtocol::Reply &r);
 
@@ -163,6 +176,10 @@ private:
     QTimer mTimeout;
     QHash<uint, QTimer *> mActs;   // actions waiting for the phone, each with its deadline
     ContactNames::Assembler mNames;
+    QHash<uint, std::function<void(const QString &)>> mDone;
+    uint mRelayCounter = 0;
+    MDConfItem *mWeatherRefresh = nullptr;
+    bool mWeatherRefreshing = false;
 };
 
 #endif // ASSISTANTSERVICE_H

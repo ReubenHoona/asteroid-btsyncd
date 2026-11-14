@@ -89,7 +89,7 @@ if(MKCAL_FOUND AND KCALCORE_FOUND)
 	add_executable(calendar_test calendar_test.cpp ../src/calendarservice.cpp
 		../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 	target_include_directories(calendar_test PRIVATE ../src)
-	target_link_libraries(calendar_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MKCAL PkgConfig::KCALCORE PkgConfig::KEEPALIVE)
+	target_link_libraries(calendar_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MKCAL PkgConfig::KCALCORE PkgConfig::KEEPALIVE PkgConfig::MLITE)
 endif()
 
 # M5 messaging polish: quiet on the charger (a fake mce), the user's own messages of a
@@ -110,7 +110,7 @@ target_link_libraries(msgpictures_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::ML
 # The notification protocol of the wearui-w2 wave (action ack, sub text, progress, ongoing, resident,
 # mute model, calls in Do Not Disturb, avatars) with the frames Gadgetbridge records (tests/frames), on a private
 # bus with a dconf service like weather_test
-add_executable(notifw2_test notifw2_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
+add_executable(notifw2_test notifw2_test.cpp ../src/notificationservice.cpp ../src/calllog.cpp ../src/batterystatus.cpp
 	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(notifw2_test PRIVATE ../src)
 target_compile_definitions(notifw2_test PRIVATE FRAMES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/frames")
@@ -167,6 +167,11 @@ target_link_libraries(timeservice_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::ML
 add_executable(connectivity_test connectivity_test.cpp ../src/connectivityfeedback.cpp ../src/wakehold.cpp)
 target_include_directories(connectivity_test PRIVATE ../src)
 target_link_libraries(connectivity_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+# FP-B2: the call log object (CR-08) on a private session bus
+add_executable(calllog_test calllog_test.cpp ../src/calllog.cpp)
+target_include_directories(calllog_test PRIVATE ../src)
+target_link_libraries(calllog_test PRIVATE Qt6::Core Qt6::DBus)
 
 foreach(t weather_test calendar_test phonedata_test messages_test)
 	if(TARGET ${t})

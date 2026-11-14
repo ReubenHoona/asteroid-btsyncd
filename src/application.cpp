@@ -26,6 +26,8 @@
 #include "voiceservice.h"
 #include "phonestatusservice.h"
 #include "assistantservice.h"
+#include "callaudio.h"
+#include "calllog.h"
 #include "messageservice.h"
 #include "heartrateservice.h"
 #ifdef BTSYNCD_HAVE_CALENDAR
@@ -63,6 +65,9 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     // phone to the answer server set there
     AssistantService *assistant = new AssistantService(10, bus, notifications);
     addService(assistant);
+    mAssistant = assistant;
+    // The call log for the Phone app's Recents (CR-08), from the phone's call cards
+    notifications->setCallObserver(new CallLog(QString(), QDBusConnection::sessionBus(), this));
     // The phone's conversations for the messages app, over the same relay
     new MessageService(assistant, QDBusConnection::sessionBus(), assistant);
     // "Share heart rate": the standard Heart Rate Service, advertised only
@@ -93,6 +98,11 @@ void Application::setPhoneLink(bool connected)
 void Application::setCallControl(CallControl *calls)
 {
     mNotifications->setCallControl(calls);
+}
+
+void Application::setCallAudio(CallAudio *calls)
+{
+    calls->setPhoneRelay(mAssistant);
 }
 
 /* Exposed slots */

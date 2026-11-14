@@ -25,6 +25,8 @@
 #include <QTimeZone>
 #include <QXmlStreamReader>
 
+#include <MDConfItem>
+
 #include <extendedcalendar.h>
 #include <extendedstorage.h>
 #include <notebook.h>
@@ -377,6 +379,31 @@ bool CalendarService::parseEvent(const QByteArray &xml, CalendarEventData *event
 
 void CalendarService::handleElement(const QByteArray &xml)
 {
+    // the <un> of an end frame follows its <sync>end</sync> directly; anything else in between
+    // (or alone) is not the end of a sync
+    const bool untilNext = mUntilNext;
+    mUntilNext = false;
+    if(xml.startsWith("<un>")) {
+        if(!untilNext) {
+            qWarning() << "Calendar: <un> without a sync end, ignored";
+            return;
+        }
+        QXmlStreamReader reader(xml);
+        bool ok = false;
+        qint64 until = 0;
+        if(reader.readNextStartElement())
+            until = reader.readElementText().trimmed().toLongLong(&ok);
+        // seconds since 1970 (milliseconds are taken too), a time in this century
+        if(ok && until > 100000000000LL)
+            until /= 1000;
+        if(!ok || until < 1000000000LL || until > 4102444800LL) {
+            qWarning() << "Calendar: the end of the synced window is not a time, ignored";
+            return;
+        }
+        MDConfItem(QStringLiteral("/org/asteroidos/calendar/synced-until")).set(QVariant::fromValue<qlonglong>(until));
+        qInfo() << "Calendar: the phone's events are synced until" << QDateTime::fromSecsSinceEpoch(until, QTimeZone::utc()).toString(Qt::ISODate);
+        return;
+    }
     if(xml.startsWith("<ev>") || xml.startsWith("<ev ")) {
         CalendarEventData event;
         if(!parseEvent(xml, &event)) {
@@ -423,6 +450,8 @@ void CalendarService::handleElement(const QByteArray &xml)
             mSaveTimer->stop();
             mStore->save();
         }
+        if(state == "end")
+            mUntilNext = true;
     } else if(xml.startsWith("<clear")) {
         mStore->clear();
         mSynced.clear();

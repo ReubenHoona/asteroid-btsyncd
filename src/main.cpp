@@ -64,6 +64,7 @@ int main(int argc, char **argv)
     // reject and end go to it first (CallControl)
     CallAudio calls;
     app.setCallControl(&calls);
+    app.setCallAudio(&calls);
     QObject::connect(&bm, &BlueZManager::connectedChanged, &calls, [&calls, &bm] { calls.setPhoneLink(bm.connected()); });
     calls.setPhoneLink(bm.connected());
     // Settings > Developer options > "Vibrate on connectivity change": a buzz when the phone

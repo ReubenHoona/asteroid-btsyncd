@@ -3,4 +3,4 @@
 <ev><id>77</id><ti>Stand-up</ti><st>1793200000</st><en>1793203600</en><lo>Room 2</lo><de>Notes</de><cn>me@example.org/Work</cn><co>ffd50000</co><rs>1</rs><ei>12</ei></ev>
 <ev><id>77</id><ti>Stand-up</ti><st>1793200000</st><en>1793203600</en><lo>Room 2</lo><de>Notes</de><cn>me@example.org/Work</cn><ei>12</ei></ev>
 <del><id>42</id></del>
-<sync>end</sync>
+<sync>end</sync><un>1793800000</un>

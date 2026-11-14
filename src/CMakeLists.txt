@@ -2,6 +2,7 @@ set(
 	SRC
 	main.cpp
 	callaudio.cpp
+	calllog.cpp
 	connectivityfeedback.cpp
 	notificationservice.cpp
 	weatherservice.cpp
@@ -38,6 +39,9 @@ set(
 set(
 	HEADERS
 	callaudio.h
+	calllog.h
+	callobserver.h
+	phonerelay.h
 	connectivityfeedback.h
 	callcontrol.h
 	notificationservice.h

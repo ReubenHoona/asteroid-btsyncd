@@ -26,6 +26,8 @@
 #include "service.h"
 #include "common.h"
 
+class AssistantService;
+class CallAudio;
 class CallControl;
 class NotificationService;
 
@@ -47,10 +49,13 @@ public:
     void setPhoneLink(bool connected);
     // Who runs the call cards' buttons on the watch's hands-free link
     void setCallControl(CallControl *calls);
+    // The hands-free link asks the phone for its call volume over the assistant relay (CR-07)
+    void setCallAudio(CallAudio *calls);
 
 private:
     QString mPath;
     NotificationService *mNotifications = nullptr;
+    AssistantService *mAssistant = nullptr;
     QList<Service *> mServices;
 
 public slots:

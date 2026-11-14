@@ -291,6 +291,12 @@ PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
             n.thread = reader.readElementText().trimmed().left(64);
         else if(name == QLatin1String("ky"))
             n.key = reader.readElementText().trimmed().left(64);
+        else if(name == QLatin1String("cv")) {
+            // t<thread id> or n<hash>: letters, digits, '_' and '-', at most 64 (the messages API's key)
+            static const QRegularExpression conversationKey(QStringLiteral("^[tn][A-Za-z0-9_-]{0,63}$"));
+            const QString cv = reader.readElementText().trimmed();
+            n.conversation = conversationKey.match(cv).hasMatch() ? cv : QString();
+        }
         else if(name == QLatin1String("ms"))
             readMessages(reader, n);
         else if(name == QLatin1String("pr"))
@@ -1726,6 +1732,15 @@ void NotificationService::post(const PhoneNotification &n)
         }
     }
 
+    // The call log (calllog.h): the phone's call cards and its missed-call notification, from
+    // the frames; nothing here is stored but by CallLog
+    if(mCallObserver) {
+        if(n.category == QLatin1String("missed_call"))
+            mCallObserver->missedCallCard(id, n.summary, n.body, n.when);
+        else if(n.isCall() || isCallCard(n.phoneActions))
+            mCallObserver->callCard(id, n.summary, n.body, n.phoneActions, n.packageName);
+    }
+
     // Ongoing and non-clearable notifications (a timer, a download, a navigation) are not
     // bridged, as stock ("When notifications aren't bridged"); calls, alarms, the
     // find-my-watch alert (their own screens) and a progress bar of Android 16's ProgressStyle
@@ -1801,6 +1816,8 @@ void NotificationService::post(const PhoneNotification &n)
     hints.insert(PhoneIdHint, QString::number(id));
     if(!n.thread.isEmpty())
         hints.insert(ThreadHint, n.thread);
+    if(!n.conversation.isEmpty())
+        hints.insert(ConversationHint, n.conversation);
     if(!n.key.isEmpty())
         hints.insert(KeyHint, n.key);
     if(!n.category.isEmpty())
@@ -1977,6 +1994,10 @@ void NotificationService::post(const PhoneNotification &n)
 
 void NotificationService::removed(int phoneId)
 {
+    // a call card gone: the call ended, or stopped ringing (also when the card itself was dismissed
+    // on the watch: the phone's removal still says so)
+    if(mCallObserver)
+        mCallObserver->callGone(phoneId);
     const uint lipstickId = mKnownAndroidNotifs.value(phoneId, 0);
     if(!lipstickId)
         return;
@@ -2140,6 +2161,8 @@ void NotificationService::ActionInvoked(uint replacesId, const QString &actionKe
     // call it knows is answered (audio on the watch), declined or ended there
     QString key = actionKey;
     if(isCallCard(mPhoneActions.value(replacesId))) {
+        if(mCallObserver)
+            mCallObserver->callAction(id, actionKey);
         if(mCallControl && actionKey == "answer" && mCallControl->answerOnWatch()) {
             markActioned(replacesId);
             return;
