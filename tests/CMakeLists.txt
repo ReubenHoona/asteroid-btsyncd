@@ -100,3 +100,32 @@ add_executable(msgpictures_test msgpictures_test.cpp ../src/notificationservice.
 	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
 target_include_directories(msgpictures_test PRIVATE ../src)
 target_link_libraries(msgpictures_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+# The notification protocol of the wearui-w2 wave (action ack, sub text, progress, ongoing, resident,
+# mute model, calls in Do Not Disturb, avatars) with the frames Gadgetbridge records (tests/frames), on a private
+# bus with a dconf service like weather_test
+add_executable(notifw2_test notifw2_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(notifw2_test PRIVATE ../src)
+target_compile_definitions(notifw2_test PRIVATE FRAMES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/frames")
+target_link_libraries(notifw2_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+# The media service's artwork, custom actions and queue (characteristics 00007008 and 00007009, media commands 5
+# and 6) on a private bus
+add_executable(media_test media_test.cpp ../src/mediaservice.cpp ../src/mediaphonedata.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
+target_include_directories(media_test PRIVATE ../src)
+target_compile_definitions(media_test PRIVATE FRAMES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/frames")
+target_link_libraries(media_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::AmberMpris PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+# The advertising schedule against a fake BlueZ on a private bus (BTSYNCD_ADVERT_TIME_DIV=100)
+add_executable(advert_test advert_test.cpp ../src/advertisement.cpp ../src/bluezmanager.cpp ../src/ancs.cpp
+	../src/ancs_notification.cpp ../src/cts.cpp ../src/settime.cpp)
+target_include_directories(advert_test PRIVATE ../src)
+target_link_libraries(advert_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
+# The screenshot hand-off to the phone on a private bus
+add_executable(screenshot_test screenshot_test.cpp ../src/screenshotservice.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
+target_include_directories(screenshot_test PRIVATE ../src)
+target_link_libraries(screenshot_test PRIVATE Qt6::Core Qt6::DBus)

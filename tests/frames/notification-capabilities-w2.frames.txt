@@ -1,0 +1,1 @@
+<capabilities><version>4</version><appactions>10</appactions><ack>1</ack><subtext>1</subtext><progress>1</progress></capabilities>

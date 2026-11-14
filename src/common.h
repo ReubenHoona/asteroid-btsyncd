@@ -43,6 +43,10 @@
 
 #define BTSYNCD_NOTIF_PATH           "/org/asteroidos/btsyncd/notifications"
 #define BTSYNCD_NOTIF_IFACE          "org.asteroidos.btsyncd.Notifications"
+#define BTSYNCD_MEDIA_PATH           "/org/asteroidos/btsyncd/media"
+#define BTSYNCD_MEDIA_IFACE          "org.asteroidos.btsyncd.Media"
+#define BTSYNCD_SCREENSHOT_PATH      "/org/asteroidos/btsyncd/screenshot"
+#define BTSYNCD_SCREENSHOT_IFACE     "org.asteroidos.btsyncd.Screenshot"
 #define BTSYNCD_VOICE_PATH           "/org/asteroidos/btsyncd/voice"
 #define BTSYNCD_VOICE_IFACE          "org.asteroidos.btsyncd.Voice"
 #define BTSYNCD_PHONE_PATH           "/org/asteroidos/btsyncd/phone"
@@ -62,6 +66,9 @@
 #define MEDIA_COMM_UUID   "00007005-0000-0000-0000-00A57E401D05"
 #define MEDIA_VOL_UUID    "00007006-0000-0000-0000-00A57E401D05"
 #define MEDIA_STATE_UUID  "00007007-0000-0000-0000-00A57E401D05"
+// Phone to watch: the artwork (<art>) and the player's custom actions and queue (<mx>)
+#define MEDIA_ART_UUID    "00007008-0000-0000-0000-00A57E401D05"
+#define MEDIA_EXTRAS_UUID "00007009-0000-0000-0000-00A57E401D05"
 
 #define NOTIF_UUID        "00009071-0000-0000-0000-00A57E401D05"
 #define NOTI_UPD_UUID     "00009001-0000-0000-0000-00A57E401D05"

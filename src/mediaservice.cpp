@@ -19,9 +19,11 @@
 #include "characteristic.h"
 #include "common.h"
 #include "messagejoiner.h"
+#include "mediaphonedata.h"
 #include "wakehold.h"
 
 #include <QDebug>
+#include <QUrl>
 #include <QDBusMessage>
 #include <QXmlStreamReader>
 #include <MprisMetaData>
@@ -218,6 +220,14 @@ void MediaCommandsChrc::volumeRequested(double volume)
     emit valueChanged();
 }
 
+void MediaCommandsChrc::indexedRequested(quint8 command, quint8 index)
+{
+    m_value.resize(2);
+    m_value[0] = char(command);
+    m_value[1] = char(index);
+    emit valueChanged();
+}
+
 void MediaCommandsChrc::emitPropertiesChanged()
 {
     QDBusConnection connection = QDBusConnection::systemBus();
@@ -255,6 +265,12 @@ public slots:
     }
 };
 
+void MediaService::phoneConnectedChanged(bool connected)
+{
+    if(!connected)
+        m_phoneData->reset();
+}
+
 MediaService::MediaService(int index, QDBusConnection bus, QObject *parent) : Service(bus, index, MEDIA_UUID, parent)
 {
     m_mprisPlayer = new MprisPlayer(this);
@@ -284,6 +300,20 @@ MediaService::MediaService(int index, QDBusConnection bus, QObject *parent) : Se
     addCharacteristic(m_commandsChrc);
     addCharacteristic(new MediaVolumeChrc(m_mprisPlayer, bus, 5, this));
     addCharacteristic(new MediaStateChrc(m_mprisPlayer, bus, 6, this));
+
+    // The artwork and the player's custom actions and queue (W2)
+    m_phoneData = new MediaPhoneData(this);
+    addCharacteristic(new MediaArtChrc(m_phoneData, bus, 7, this));
+    addCharacteristic(new MediaExtrasChrc(m_phoneData, bus, 8, this));
+    connect(m_phoneData, &MediaPhoneData::indexedCommand, m_commandsChrc, &MediaCommandsChrc::indexedRequested);
+    // The player's MPRIS metadata has the picture too
+    connect(m_phoneData, &MediaPhoneData::artChanged, this, [this](const QString &path, const QString &) {
+        m_mprisPlayer->metaData()->setArtUrl(path.isEmpty() ? QVariant() : QVariant(QUrl::fromLocalFile(path)));
+    });
+    // The music app's API: the picture, its colour, the lists, and the commands for them
+    if(!QDBusConnection::sessionBus().registerObject(BTSYNCD_MEDIA_PATH, new MediaDBusApi(m_phoneData),
+                                                     QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals))
+        qWarning() << "MediaService: cannot register" << BTSYNCD_MEDIA_PATH << "on the session bus";
 
     connect(m_mprisPlayer, SIGNAL(pauseRequested()), m_commandsChrc, SLOT(pauseRequested()));
     connect(m_mprisPlayer, SIGNAL(playRequested()), m_commandsChrc, SLOT(playRequested()));

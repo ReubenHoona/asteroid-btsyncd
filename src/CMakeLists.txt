@@ -4,6 +4,7 @@ set(
 	notificationservice.cpp
 	weatherservice.cpp
 	mediaservice.cpp
+	mediaphonedata.cpp
 	batteryservice.cpp
 	batterystatus.cpp
 	screenshotservice.cpp
@@ -35,6 +36,7 @@ set(
 	notificationservice.h
 	weatherservice.h
 	mediaservice.h
+	mediaphonedata.h
 	batteryservice.h
 	batterystatus.h
 	screenshotservice.h

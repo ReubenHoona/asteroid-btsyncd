@@ -208,6 +208,7 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
     int level = mBatteryLevel;
     bool charging = mCharging;
     QString dnd, bed;
+    bool answers = false;
     while(reader.readNextStartElement()) {
         const auto name = reader.name();
         const QString text = reader.readElementText().trimmed();
@@ -226,8 +227,15 @@ void PhoneStatusService::applyStatus(const QByteArray &xml)
             dnd = text;
         } else if(name == QLatin1String("bed")) {
             bed = text;
+        } else if(name == QLatin1String("ak")) {
+            // The phone answers what the watch sends for a reply, an app action and "Open on
+            // phone" (the full status at the connection carries it; an older one never does)
+            answers = text == QLatin1String("1");
         }
     }
+    // Sticky: partial statuses do not repeat it; the phone going takes it away
+    if(answers)
+        mNotifications->setPhoneAnswers(true);
     if(level != mBatteryLevel || charging != mCharging) {
         mBatteryLevel = level;
         mCharging = charging;
@@ -300,7 +308,11 @@ void PhoneStatusService::modeConfChanged()
 void PhoneStatusService::updateSilence()
 {
     mNotifications->setDoNotDisturb(mDnd);
-    mNotifications->setModeQuiet(mBedtime || mTheaterConf->value(false).toBool());
+    const bool theater = mTheaterConf->value(false).toBool();
+    mNotifications->setModeQuiet(mBedtime || theater);
+    // Which one, for the calls a mode lets through (stock: Bedtime, yes; Theater, none)
+    mNotifications->setBedtimeMode(mBedtime);
+    mNotifications->setTheaterMode(theater);
 }
 
 void PhoneStatusService::setDnd(bool on, bool fromPhone)

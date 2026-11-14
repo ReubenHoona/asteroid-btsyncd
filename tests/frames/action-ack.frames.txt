@@ -1,0 +1,6 @@
+<ack><id>1793200001</id><ty>reply</ty><ok>1</ok></ack>
+<ack><id>1793200001</id><ty>reply</ty><ok>0</ok></ack>
+<ack><id>1793200001</id><ty>app</ty><ix>2</ix><ok>1</ok></ack>
+<ack><id>1793200001</id><ty>app</ty><ix>0</ix><ok>0</ok></ack>
+<ack><id>-5</id><ty>open</ty><ok>1</ok></ack>
+<ack><id>1793200001</id><ty>open</ty><ok>0</ok></ack>

@@ -24,6 +24,7 @@
 #include <QDBusConnection>
 #include <QTimer>
 
+#include "advertisement.h"
 #include "ancs.h"
 #include "cts.h"
 
@@ -35,6 +36,9 @@ class BlueZManager : public QObject
 public:
     explicit BlueZManager(QDBusObjectPath appPath, QDBusObjectPath advertPath, QObject *parent = 0);
     void updateConnected();
+    // The advertisement whose intervals follow the schedule after the phone left (see
+    // Advertisement), set before the adapter is known
+    void setAdvertisement(Advertisement *advertisement);
     // A central (the phone) is connected
     bool connected() const { return mConnected; }
 
@@ -58,6 +62,15 @@ private:
     bool mRegisterAll = false;
     bool mReRegistering = false;
     QTimer mAdvertCheck;
+    // The advertising schedule: the advertisement, when the phone left (CLOCK_BOOTTIME, ms), the
+    // timer of the next step
+    Advertisement *mAdvert = nullptr;
+    qint64 mAdvertSince = 0;
+    QTimer mAdvertStep;
+    bool mAdvertRetriedDefault = false;
+    void startAdvertSchedule(bool registerNow);
+    void scheduleAdvertStep();
+    void advertStep();
 
     void updateAdapter();
     void setAdapter(QString adatper);

@@ -31,6 +31,10 @@ using namespace Amber;
 #define MEDIA_COMMAND_PLAY     0x2
 #define MEDIA_COMMAND_PAUSE    0x3
 #define MEDIA_COMMAND_VOLUME   0x4
+// A custom action of the player (byte 1: the index in the last <mx> the watch got) and a
+// queue item to skip to (byte 1: the index in that list); see MediaPhoneData
+#define MEDIA_COMMAND_CUSTOM   0x5
+#define MEDIA_COMMAND_QUEUE    0x6
 
 
 class MediaCommandsChrc : public Characteristic
@@ -69,10 +73,14 @@ public slots:
     void nextRequested();
     void previousRequested();
     void volumeRequested(double volume);
+    // Two bytes: the command (MEDIA_COMMAND_CUSTOM or MEDIA_COMMAND_QUEUE) and the index
+    void indexedRequested(quint8 command, quint8 index);
 
     void StartNotify() {}
     void StopNotify() {}
 };
+
+class MediaPhoneData;
 
 class MediaService : public Service
 {
@@ -80,9 +88,14 @@ class MediaService : public Service
 public:
     explicit MediaService(int index, QDBusConnection bus, QObject *parent = 0);
 
+public slots:
+    // The phone (dis)connected: a phone that is gone leaves no artwork and no custom actions or queue
+    void phoneConnectedChanged(bool connected);
+
 private:
     MprisPlayer *m_mprisPlayer;
     MediaCommandsChrc *m_commandsChrc;
+    MediaPhoneData *m_phoneData;
 };
 
 #endif // MEDIASERVICE_H

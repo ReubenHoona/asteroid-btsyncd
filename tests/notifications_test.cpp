@@ -277,15 +277,15 @@ int main(int argc, char **argv)
         CHECK(!p.hints.contains("x-asteroid-app-actions"));
         CHECK(!p.hints.contains("x-asteroid-smart-replies"));
     }
-    emitActionInvoked(fakeConn, 101, "app-7");
+    emitActionInvoked(fakeConn, 101, "app-12");
     CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
-    CHECK(collector.feedback == "<action><id>43</id><ty>app-7</ty></action>");
+    CHECK(collector.feedback == "<action><id>43</id><ty>app-12</ty></action>");
 
     // Find my watch alert with "found"
     collector.feedback.clear();
     write(driver, "<insert><id>-77</id><vb>ringtone</vb><an>Incoming call</an><su>Gadgetbridge</su><ac>found</ac></insert>");
     CHECK(waitFor([&] { return postedCount(fake) == 3; }));
-    CHECK(lastPosted(fake).actions == (QStringList() << "found" << "Found it"));
+    CHECK(lastPosted(fake).actions == (QStringList() << "found" << "Stop sound"));
     // the watch itself rings (ngfd's ringtone, with sound)
     CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "ringtone");
     emitActionInvoked(fakeConn, 102, "found");
@@ -369,7 +369,7 @@ int main(int argc, char **argv)
         CHECK(p.replacesId == 0);
         CHECK(p.body == "Hi\nAre you coming?");
         CHECK(p.hints.value("x-nemo-preview-body").toString() == "Are you coming?");
-        CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_normal");
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_message");
         CHECK(p.hints.value("x-asteroid-thread").toString() == "c0ffee01");
         QMutexLocker l(&fake.lock);
         dana = fake.nextId - 1;
@@ -410,7 +410,7 @@ int main(int argc, char **argv)
         CHECK(p.replacesId == 0);
         CHECK(p.body == "Dana: Hi\nDana: Are you coming?\nMe: Yes\nDana: Hello?");
         CHECK(p.hints.value("x-nemo-preview-body").toString() == "Hello?");
-        CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_normal");
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_message");
         QMutexLocker l(&fake.lock);
         CHECK(fake.closed.size() == closedBefore + 1 && fake.closed.last() == dana);
         dana = fake.nextId - 1;
@@ -470,14 +470,14 @@ int main(int argc, char **argv)
         QMutexLocker l(&fake.lock);
         upload = fake.nextId - 1;
     }
-    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "notif_normal");
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "notif_default");
     write(driver, "<insert><id>62</id><vb>normal</vb><an>Files</an><su>Upload</su><bo>50%</bo><th>up01</th><oa>1</oa></insert>");
     CHECK(waitFor([&] { return postedCount(fake) == before + 8; }));
     CHECK(lastPosted(fake).replacesId == upload);
     CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "notif_silent");
     CHECK(lastPosted(fake).body == "50%");
-    // Ongoing: the same
-    write(driver, "<insert><id>63</id><vb>normal</vb><an>Files</an><su>Upload</su><bo>90%</bo><th>up01</th><og>1</og></insert>");
+    // Ongoing with a progress bar (a live update): the same
+    write(driver, "<insert><id>63</id><vb>normal</vb><an>Files</an><su>Upload</su><bo>90%</bo><th>up01</th><og>1</og><pg><p>90</p><x>100</x></pg></insert>");
     CHECK(waitFor([&] { return postedCount(fake) == before + 9; }));
     CHECK(lastPosted(fake).replacesId == upload);
     CHECK(!lastPosted(fake).hints.contains("x-nemo-preview-body"));
@@ -756,7 +756,7 @@ int main(int argc, char **argv)
         {
             const Posted p = lastPosted(fake);
             CHECK(p.hints.value("x-nemo-preview-body").toString() == "great");
-            CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_normal");
+            CHECK(p.hints.value("x-nemo-feedback").toString() == "notif_message");
         }
     }
 
@@ -824,8 +824,9 @@ int main(int argc, char **argv)
         CHECK(PostPlan::decide(n, true, true, false).kind == PostPlan::Repost);
         CHECK(PostPlan::decide(n, true, false, false).kind == PostPlan::Update);
         CHECK(!PostPlan::decide(n, true, false, false).vibrate);
+        // muted on the phone (<vb>none</vb>): no banner, no wake, no vibration (stock: "Alert info is muted")
         n.vibrate = "none";
-        CHECK(PostPlan::decide(n, false, true, false).preview && !PostPlan::decide(n, false, true, false).vibrate);
+        CHECK(!PostPlan::decide(n, false, true, false).preview && !PostPlan::decide(n, false, true, false).vibrate);
         n.vibrate = "ringtone";
         n.phoneActions = QStringList() << "answer" << "reject";
         CHECK(PostPlan::decide(n, true, true, false).kind == PostPlan::Update);
@@ -839,11 +840,15 @@ int main(int argc, char **argv)
     // only vibrates on the watch, the find-my-watch alert rings it
     {
         PhoneNotification n;
-        CHECK(PostPlan::feedbackEvent(n) == "notif_strong");
+        // stock's two notification alerts: the message one and the system one
+        CHECK(PostPlan::feedbackEvent(n) == "notif_default");
         n.vibrate = "normal";
-        CHECK(PostPlan::feedbackEvent(n) == "notif_normal");
+        CHECK(PostPlan::feedbackEvent(n) == "notif_default");
+        n.category = "msg";
+        CHECK(PostPlan::feedbackEvent(n) == "notif_message");
+        n.category.clear();
         n.vibrate = "strong";
-        CHECK(PostPlan::feedbackEvent(n) == "notif_strong");
+        CHECK(PostPlan::feedbackEvent(n) == "notif_default");
         n.vibrate = "ringtone";
         n.phoneActions = QStringList() << "answer" << "reject";
         CHECK(PostPlan::feedbackEvent(n) == "eos_phone_ringing");

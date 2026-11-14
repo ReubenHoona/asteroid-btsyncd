@@ -27,10 +27,83 @@
 #include <QDBusVariant>
 #include <QDebug>
 #include <QTimer>
+#include <time.h>
 
 #include "common.h"
 
 #include <MDConfItem>
+
+// Milliseconds on the clock that also runs while the CPU sleeps
+static qint64 bootMs()
+{
+    timespec ts;
+    clock_gettime(CLOCK_BOOTTIME, &ts);
+    return qint64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+// BTSYNCD_ADVERT_TIME_DIV: the schedule's times divided by this, for tests
+static int timeDiv()
+{
+    static const int div = qMax(1, qEnvironmentVariableIntValue("BTSYNCD_ADVERT_TIME_DIV"));
+    return div;
+}
+
+// The time since the phone left as the schedule counts it
+static qint64 scheduleMs(qint64 since)
+{
+    return (bootMs() - since) * timeDiv();
+}
+
+void BlueZManager::setAdvertisement(Advertisement *advertisement)
+{
+    mAdvert = advertisement;
+    // The phone is not connected at start: the schedule runs from now
+    mAdvertSince = bootMs();
+    if(mAdvert) {
+        mAdvert->setStage(0);
+        scheduleAdvertStep();
+    }
+}
+
+// The phone left: fast advertising again, then slower and slower
+void BlueZManager::startAdvertSchedule(bool registerNow)
+{
+    if(!mAdvert || mAdvert->defaultIntervals())
+        return;
+    mAdvertSince = bootMs();
+    const bool changed = mAdvert->stageIndex() != 0;
+    mAdvert->setStage(0);
+    if(registerNow && changed)
+        reRegisterAdvertisement(QStringLiteral("fast advertising, the phone left"));
+    scheduleAdvertStep();
+}
+
+void BlueZManager::scheduleAdvertStep()
+{
+    mAdvertStep.stop();
+    if(!mAdvert || mConnected || mAdvert->defaultIntervals())
+        return;
+    const int next = mAdvert->stageIndex() + 1;
+    if(next >= Advertisement::stageCount())
+        return;
+    // A single timer to the next step, set again after each (seven in all); it counts the time
+    // the CPU is awake, and the step it finds when it fires is for the time that really passed
+    const qint64 wait = (Advertisement::stage(next).afterMs - scheduleMs(mAdvertSince)) / timeDiv();
+    mAdvertStep.start(int(qBound(qint64(1000 / timeDiv()), wait, qint64(600000))));
+}
+
+void BlueZManager::advertStep()
+{
+    if(!mAdvert || mConnected)
+        return;
+    const int stage = Advertisement::stageAt(scheduleMs(mAdvertSince));
+    if(stage != mAdvert->stageIndex()) {
+        mAdvert->setStage(stage);
+        qInfo() << "Advertising interval:" << Advertisement::stage(stage).minMs << "to" << Advertisement::stage(stage).maxMs << "ms";
+        reRegisterAdvertisement(QStringLiteral("slower advertising"));
+    }
+    scheduleAdvertStep();
+}
 
 BlueZManager::BlueZManager(QDBusObjectPath appPath, QDBusObjectPath advertPath, QObject *parent)
     : QObject(parent), mAppPath(appPath), mAdvertPath(advertPath), mAdapter("adapter"), mBus(QDBusConnection::systemBus())
@@ -52,6 +125,8 @@ BlueZManager::BlueZManager(QDBusObjectPath appPath, QDBusObjectPath advertPath, 
     mAdvertCheck.setInterval(checkMs > 0 ? checkMs : 60000);
     connect(&mAdvertCheck, &QTimer::timeout, this, &BlueZManager::checkAdvertising);
     mAdvertCheck.start();
+    mAdvertStep.setSingleShot(true);
+    connect(&mAdvertStep, &QTimer::timeout, this, &BlueZManager::advertStep);
 
     QDBusInterface remoteOm(BLUEZ_SERVICE_NAME, "/", DBUS_OM_IFACE, mBus);
     if(remoteOm.isValid())
@@ -194,6 +269,11 @@ void BlueZManager::setConnected(bool connected)
 {
     if (connected != mConnected) {
         mConnected = connected;
+        // The schedule starts when the phone leaves, and ends when it is there
+        if (connected)
+            mAdvertStep.stop();
+        else
+            startAdvertSchedule(true);
         emit connectedChanged();
     }
 }
@@ -247,9 +327,22 @@ void BlueZManager::registerAdvertisement()
     QDBusPendingCallWatcher *advWatcher = new QDBusPendingCallWatcher(advCall, this);
     connect(advWatcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) {
         QDBusPendingReply<> reply = *w;
-        if (reply.isError())
+        if (reply.isError()) {
             qWarning() << "RegisterAdvertisement failed:" << reply.error().message();
-        else
+            // The controller or BlueZ did not take the intervals: once, at BlueZ's own interval
+            const QString name = reply.error().name();
+            if (mAdvert && !mAdvert->defaultIntervals() && !mAdvertRetriedDefault
+                    && (name.endsWith("InvalidArguments") || name.endsWith("NotSupported") || name.endsWith("Failed"))) {
+                mAdvertRetriedDefault = true;
+                qWarning() << "Advertising at BlueZ's own interval from now on";
+                mAdvert->useDefaultIntervals();
+                mAdvertStep.stop();
+                mReRegistering = false;
+                w->deleteLater();
+                registerAdvertisement();
+                return;
+            }
+        } else
             qInfo() << "Advertisement" << mAdvertPath.path() << "registered";
         mReRegistering = false;
         w->deleteLater();

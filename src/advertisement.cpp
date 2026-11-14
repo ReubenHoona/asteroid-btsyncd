@@ -84,6 +84,60 @@ bool Advertisement::getDiscoverable()
     return mDiscoverable;
 }
 
+// ms after the phone left, minimum and maximum interval (ms). The fast stage is the 100 to 150 ms
+// band Android's connect scans find quickest; the cap is 2.5 to 3 s.
+static const Advertisement::Stage Stages[] = {
+    {      0,  100,  150 },
+    {  10000,  200,  300 },
+    {  20000,  400,  600 },
+    {  40000,  800, 1000 },
+    {  80000, 1000, 1500 },
+    { 160000, 1500, 2000 },
+    { 320000, 2000, 2500 },
+    { 540000, 2500, 3000 },
+};
+
+int Advertisement::stageCount()
+{
+    return int(sizeof(Stages) / sizeof(Stages[0]));
+}
+
+const Advertisement::Stage &Advertisement::stage(int index)
+{
+    return Stages[qBound(0, index, stageCount() - 1)];
+}
+
+int Advertisement::stageAt(qint64 sinceMs)
+{
+    int stage = 0;
+    for(int i = 1; i < stageCount(); i++) {
+        if(sinceMs >= Stages[i].afterMs)
+            stage = i;
+    }
+    return stage;
+}
+
+void Advertisement::setStage(int index)
+{
+    mStage = qBound(0, index, stageCount() - 1);
+}
+
+void Advertisement::useDefaultIntervals()
+{
+    mDefaultIntervals = true;
+}
+
+// BlueZ's own interval (1.28 s) when the controller does not take ours
+uint Advertisement::getMinInterval()
+{
+    return mDefaultIntervals ? 1280 : Stages[mStage].minMs;
+}
+
+uint Advertisement::getMaxInterval()
+{
+    return mDefaultIntervals ? 1280 : Stages[mStage].maxMs;
+}
+
 /* Exposed slots */
 void Advertisement::Release()
 {

@@ -40,9 +40,14 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     mNotifications = notifications;
     addService(notifications);
     addService(new WeatherService(1, bus));
-    addService(new MediaService(2, bus));
+    MediaService *media = new MediaService(2, bus);
+    addService(media);
+    connect(notifications, &NotificationService::phoneConnectedChanged, media, &MediaService::phoneConnectedChanged);
     addService(new BatteryService(3, bus));
-    addService(new ScreenshotService(4, bus));
+    ScreenshotService *screenshots = new ScreenshotService(4, bus);
+    // A screenshot the watch took goes to a phone that is there (BlueZ keeps its subscriptions over a disconnection)
+    screenshots->content()->setPhoneCheck([notifications] { return notifications->phoneConnected(); });
+    addService(screenshots);
     addService(new TimeService(5, bus));
     addService(new HealthService(6, bus));
     addService(new VoiceService(7, bus, notifications));

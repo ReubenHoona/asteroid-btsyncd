@@ -19,6 +19,7 @@
 #include <QDBusMessage>
 #include <QDebug>
 #include <QFile>
+#include <QFileInfo>
 
 #include "screenshotservice.h"
 #include "characteristic.h"
@@ -63,6 +64,42 @@ void ScreenshotContentChrc::onScreenshotTaken(QString path)
     f.close();
 }
 
+const char *ScreenshotContentChrc::notAnImage(const QString &path)
+{
+    const QFileInfo info(path);
+    if(!info.isFile())
+        return "not a file";
+    if(info.size() <= 0 || info.size() > MaxPushBytes)
+        return "empty or too large";
+    QFile f(path);
+    if(!f.open(QIODevice::ReadOnly))
+        return "cannot be read";
+    const QByteArray head = f.read(8);
+    const bool jpeg = head.startsWith("\xff\xd8\xff");
+    const bool png = head == QByteArray("\x89PNG\r\n\x1a\n", 8);
+    return jpeg || png ? nullptr : "not a JPEG or PNG";
+}
+
+bool ScreenshotContentChrc::push(const QString &path)
+{
+    if(!m_notifying || (m_phoneCheck && !m_phoneCheck())) {
+        qInfo() << "Screenshot for the phone: no phone is listening";
+        return false;
+    }
+    if(const char *why = notAnImage(path)) {
+        qWarning() << "Screenshot for the phone refused:" << why;
+        return false;
+    }
+    qInfo() << "Screenshot for the phone:" << QFileInfo(path).size() << "bytes";
+    onScreenshotTaken(path);
+    return true;
+}
+
+bool ScreenshotDBusApi::Push(const QString &path)
+{
+    return m_service->content()->push(path);
+}
+
 void ScreenshotContentChrc::emitPropertiesChanged()
 {
     QDBusConnection connection = QDBusConnection::systemBus();
@@ -85,9 +122,15 @@ ScreenshotService::ScreenshotService(int index, QDBusConnection bus, QObject *pa
 {
     ScreenshotReqChrc *reqChrc = new ScreenshotReqChrc(bus, 0, this);
     ScreenshotContentChrc *contChrc = new ScreenshotContentChrc(bus, 1, this);
+    m_content = contChrc;
 
     connect(reqChrc, SIGNAL(screenshotTaken(QString)), contChrc, SLOT(onScreenshotTaken(QString)));
 
     addCharacteristic(reqChrc);
     addCharacteristic(contChrc);
+
+    // The launcher's screenshots for the phone
+    if(!QDBusConnection::sessionBus().registerObject(BTSYNCD_SCREENSHOT_PATH, new ScreenshotDBusApi(this),
+                                                     QDBusConnection::ExportAllSlots))
+        qWarning() << "ScreenshotService: cannot register" << BTSYNCD_SCREENSHOT_PATH << "on the session bus";
 }

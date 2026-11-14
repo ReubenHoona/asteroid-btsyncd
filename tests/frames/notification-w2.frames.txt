@@ -1,0 +1,4 @@
+<insert><id>9</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><ai>ios-notifications-outline</ai><su>Alice</su><bo>Lunch?</bo><ac>reply,open,mute</ac><ax><a>Action 1</a><a>Action 2</a><a>Action 3</a><a>Action 4</a><a>Action 5</a><a>Action 6</a><a>Action 7</a><a>Action 8</a><a>Action 9</a><a>Action 10</a></ax></insert>
+<insert><id>9</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><ai>ios-notifications-outline</ai><su>Alice</su><st>Inbox</st><bo>Lunch?</bo><ac>reply,open,mute</ac><ax><a>Archive1</a></ax></insert>
+<insert><id>9</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><ai>ios-notifications-outline</ai><su>Alice</su><bo>Lunch?</bo><ac>reply,open,mute</ac><ne>1</ne></insert>
+<insert><id>9</id><vb>normal</vb><pn>org.example.chat</pn><an>Chat</an><ai>ios-notifications-outline</ai><su>Ride</su><bo>Arriving in 6 min</bo><ac>reply,open,mute</ac><og>1</og><pg><p>40</p><x>100</x><sg>25:ff0000,75:-</sg></pg></insert>

@@ -52,6 +52,8 @@ int main(int argc, char **argv)
     Application app;
     Advertisement advert;
     BlueZManager bm(app.getPath(), advert.getPath());
+    // its advertising intervals follow the time since the phone left
+    bm.setAdvertisement(&advert);
     // Whether the phone is there follows BlueZ's connection (see
     // NotificationService::setLinkConnected)
     QObject::connect(&bm, &BlueZManager::connectedChanged, &app, [&app, &bm] { app.setPhoneLink(bm.connected()); });

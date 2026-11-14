@@ -63,6 +63,11 @@ struct PhoneNotification
     // capability), the same length as messages: id "" for a message without
     struct MessagePicture { QString id; int width = 0, height = 0; };
     QList<MessagePicture> messagePictures;
+    // Version 5, per message like messages: when it was sent (epoch seconds, 0 unknown, <ts>) and
+    // the sender's avatar (<av><i>ID</i><w>W</w><h>H</h></av>, a picture of the picture channel,
+    // id "" without)
+    QList<qint64> messageTimes;
+    QList<MessagePicture> messageAvatars;
     // Every picture the card shows: its own (<pc>) and its messages', newest first
     QStringList pictureIds() const;
     // The newest message's picture id, "" if the messages have none
@@ -70,6 +75,20 @@ struct PhoneNotification
     int importance = 0;                         // Android's 1 (min) .. 5 (max), 0 unknown
     bool onlyAlertOnce = false;
     bool ongoing = false;
+    // Version 5: the sub text (<st>, one line), the reply's input forbids emoji (<ne>1</ne>),
+    // a progress bar (<pg>), the phone's "when" in seconds (<wh>, only when the notification
+    // shows it), the caller is a starred contact (<sd>1</sd> on a call)
+    QString subText;
+    bool noEmoji = false;
+    struct Progress {
+        bool present = false;
+        bool indeterminate = false;
+        int value = 0, max = 0;
+        // "LENGTH:RRGGBB" (or "-" for the theme's colour) per segment, comma separated
+        QString segments;
+    } progress;
+    qint64 when = 0;
+    bool starred = false;
     QString category;
     QString iconHash;
     // Its picture (watches with <pictures> in their capabilities): the picture's id and the
@@ -85,7 +104,8 @@ struct PhoneNotification
     // What the banner shows: the newest message
     QString previewBody() const;
     // The conversation for the launcher's full view (the x-asteroid-messages hint): a JSON
-    // array of {"s": sender, "t": text, "me": true for the user's own}, "" without messages
+    // array of {"s": sender, "t": text, "me": true for the user's own, "p"/"w"/"h": its picture,
+    // "ts": when (epoch seconds), "a": the sender's avatar file}, "" without messages
     QString messagesJson() const;
     // HTML character references (&#x1F603; &#128515;) in a text, as the characters they are
     static QString decodeCharacterReferences(const QString &text, int *found = nullptr);
@@ -106,6 +126,8 @@ struct PhoneNotification
  * SysUI, OffBodyAlertingMuter: alerting is muted while power is connected):
  * no banner, no vibration, but for the find-my-watch alert. quiet says why a
  * notification that would have alerted does not (for the log), else nullptr.
+ * callAllowed: a call that Do Not Disturb or Bedtime lets through (a starred contact
+ * or a repeat caller, as stock's zen policy).
  */
 struct PostPlan
 {
@@ -116,10 +138,16 @@ struct PostPlan
     const char *quiet = nullptr;
 
     static PostPlan decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb,
-                           bool onCharger = false);
+                           bool onCharger = false, bool callAllowed = false);
     // The ngfd event (lipstick's x-nemo-feedback) of a notification that
-    // vibrates, from the phone's <vb>
-    static QString feedbackEvent(const PhoneNotification &n);
+    // vibrates, from the phone's <vb>. Stock's sounds: a message plays the message
+    // alert, every other notification the system one (events notif_message and
+    // notif_default; ngfd mutes their sound while "Mute ring & notifications" is on),
+    // and a call rings the ringtone when that mute is off (muteRing false), else it only
+    // vibrates (eos_phone_ringing).
+    static QString feedbackEvent(const PhoneNotification &n, bool muteRing = true);
+    // A message (Android's message category, or a conversation with messages)
+    static bool isMessage(const PhoneNotification &n);
 };
 
 /*
@@ -138,6 +166,10 @@ struct PostPlan
  * and ty=unmute: the user turned the notifications of this notification's app
  * on again on the watch (ty=mute turned them off; phones that do not know
  * unmute ignore it)
+ * With <ack>1</ack> in the capabilities the phone answers a reply, an app action and
+ * "Open on phone" on the notification characteristic:
+ *   <ack><id>ID</id><ty>reply|app|open</ty>[<ix>N</ix>]<ok>1|0</ok></ack>
+ * (see NotificationService::actionAck); its status says <ak>1</ak> when it does
  * A dismiss while no phone is subscribed waits (version 4) and goes out
  * when a phone subscribes again.
  */
@@ -219,8 +251,22 @@ public slots:
     bool SetAppNotifications(uint notificationId, bool enabled);
     // The watch is on its charger and phone notifications come quietly (see PostPlan)
     bool QuietOnCharger();
+    /*
+     * The phone answers what the watch sends for a reply, an app action and "Open on
+     * phone" (ActionResult follows each, within ActionAckMs): false for a phone that does
+     * not, which gets "ok" at once, as before.
+     */
+    bool ActionAcks();
 
 signals:
+    /*
+     * The result of a reply, app action or "Open on phone" the watch sent for this
+     * notification (lipstick id): kind "reply", "app" or "open", the app action's index (else
+     * -1), result "ok" (the phone ran it; at once for a phone that does not answer),
+     * "failed" (the phone could not, or no phone is connected) or "timeout" (no answer within
+     * five seconds).
+     */
+    void ActionResult(uint notificationId, const QString &kind, int index, const QString &result);
     void FindPhoneChanged(bool ringing);
     // The phone (dis)connected: subscribed to the feedback or not any more
     void PhoneConnectedChanged(bool connected);
@@ -248,6 +294,20 @@ public:
     static constexpr const char *CategoryHint = "x-asteroid-category";
     // The conversation's messages for the full view (PhoneNotification::messagesJson)
     static constexpr const char *MessagesHint = "x-asteroid-messages";
+    // Version 5: the sub text (a line under the title), no emoji in the reply input, the
+    // progress bar (value, maximum, indeterminate, segments "LENGTH:RRGGBB,..." with "-"
+    // for the theme's colour), the find-my-watch alert (full screen "Playing sound"), a call
+    // that Do Not Disturb or Bedtime lets through ("starred" or "repeat"), and lipstick's
+    // resident (the card stays after an action: the phone updates or removes it)
+    static constexpr const char *SubTextHint = "x-asteroid-subtext";
+    static constexpr const char *NoEmojiHint = "x-asteroid-no-emoji";
+    static constexpr const char *ProgressHint = "x-asteroid-progress";
+    static constexpr const char *ProgressMaxHint = "x-asteroid-progress-max";
+    static constexpr const char *ProgressIndeterminateHint = "x-asteroid-progress-indeterminate";
+    static constexpr const char *ProgressSegmentsHint = "x-asteroid-progress-segments";
+    static constexpr const char *FindWatchHint = "x-asteroid-find-watch";
+    static constexpr const char *CallExceptionHint = "x-asteroid-call-exception";
+    static constexpr const char *ResidentHint = "resident";
     // A card the phone removed closes this much later (see removed())
     static const int CloseDelayMs = 1500;
     // The phone's first update of a card within this long after a reply
@@ -289,6 +349,40 @@ public:
     // as stock (alarms and the find-my-watch alert still come through)
     void setModeQuiet(bool on) { mModeQuiet = on; }
     bool modeQuiet() const { return mModeQuiet; }
+    // Which of the modes is on (Bedtime, Theater), for the calls they let through: Do Not
+    // Disturb and Bedtime ring for starred contacts and repeat callers (stock's zen policy
+    // Policy(120,2,0) and createZenPolicyFor bedtime), Theater for none. A quiet mode that
+    // is neither counts as Bedtime.
+    void setBedtimeMode(bool on) { mBedtimeMode = on; }
+    void setTheaterMode(bool on) { mTheaterMode = on; }
+    // A second call from the same caller within this long is a repeat caller (Android's
+    // config_zen_repeat_callers_threshold)
+    static const int RepeatCallerMs = 15 * 60 * 1000;
+    // The reason a ringing call is let through while the watch is quiet ("starred",
+    // "repeat"), nullptr when it is not; also remembers the caller (in memory only). newCard:
+    // the phone's call card is a new one, whose own state starts afresh.
+    const char *callException(const PhoneNotification &n, bool newCard);
+
+    // "Mute ring & notifications" (stock's ringer mode VIBRATE, the default): a call only
+    // vibrates, notifications play no sound (ngfd mutes it); off: calls ring and
+    // notifications play the message or system sound
+    static constexpr const char *MuteRingKey = "/org/asteroidos/sound/mute-ring-notifications";
+    static bool muteRingAndNotifications();
+
+    /*
+     * The phone answers a reply, an app action and "Open on phone" (<ak>1</ak> in its
+     * status, set by the phone status service), and says whether it could do it on the
+     * notification characteristic (actionAck). Each of those feedbacks starts a timer of
+     * ActionAckMs (no periodic timer); ActionResult is emitted with the answer, or
+     * "timeout". A phone that does not answer gets "ok" at once, and no phone at all
+     * "failed". The flag is gone when the phone is.
+     */
+    static const int ActionAckMs = 5000;
+    bool phoneAnswers() const { return mPhoneAnswers; }
+    void setPhoneAnswers(bool on) { mPhoneAnswers = on; }
+    void setActionAckMs(int ms) { mActionAckMs = ms; }
+    // What the phone wrote: <ack><id>PHONE ID</id><ty>TYPE</ty><ix>N</ix><ok>1|0</ok></ack>
+    void actionAck(int phoneId, const QString &type, int index, bool ok);
 
     // The protocol version 4 app icon cache (~/.cache/asteroid-btsyncd/icons):
     // its token changes when it starts empty, so the phone sends its icons again
@@ -395,6 +489,7 @@ signals:
     void findPhoneChanged(bool ringing);
     void phoneConnectedChanged(bool connected);
     void pictureChanged(const QString &path, bool available);
+    void actionResult(uint notificationId, const QString &kind, int index, const QString &result);
 
 public:
     // What the phone offered for a notification (by lipstick id), and for a
@@ -411,6 +506,15 @@ private slots:
 
 private:
     void sendFeedback(int phoneId, const QString &type, const QString &text = QString(), int index = -1);
+    // A reply, app action or "Open on phone" went out (sent: to a phone that is there): its result
+    // comes from the phone's answer or the timer
+    void trackAction(int phoneId, const QString &kind, int index, bool sent);
+    void reportAction(uint lipstickId, const QString &kind, int index, const char *result);
+    void failPendingActions();
+    // A card's action was reported to the phone: lipstick may close the card for it (a card
+    // that is not resident), which is no dismiss
+    void markActioned(uint lipstickId);
+    bool wasActioned(uint lipstickId);
     void setFindingPhone(bool ringing);
     void closeNow(uint lipstickId);
     void flushQueuedDismissals();
@@ -439,9 +543,21 @@ private:
     int mChargerOverride = -1;
     QString mChargerLogged;
     // Lipstick ids whose close follows an action already reported to the
-    // phone: lipstick removes a notification after any action, and that close
-    // must not reach the phone as a dismiss.
-    QSet<uint> mActioned;
+    // phone (and when): lipstick removes a notification that is not resident
+    // after any action, and that close must not reach the phone as a dismiss. A
+    // resident card stays, so only a close right after the action is its.
+    QHash<uint, qint64> mActioned;
+    static const int ActionedMs = 3000;
+    struct PendingAction { int phoneId; QString kind; int index; uint lipstickId; int token; };
+    QList<PendingAction> mPending;
+    int mPendingToken = 0;
+    int mActionAckMs = ActionAckMs;
+    bool mPhoneAnswers = false;
+    bool mBedtimeMode = false, mTheaterMode = false;
+    struct CallVerdict { bool starred = false; bool repeat = false; qint64 at = 0; };
+    QHash<int, CallVerdict> mCallVerdicts;
+    // The callers that rang (a hash of their text, never the text) and when
+    QHash<QString, qint64> mCallersSeen;
     QHash<uint, QStringList> mPhoneActions;
     QHash<uint, QList<QVariant>> mCallNotify;
     QHash<uint, QString> mTimestamps;

@@ -58,12 +58,14 @@ static QString actionLabel(const QString &key)
     if(key == "reject") return QObject::tr("Decline");
     if(key == "silence") return QObject::tr("Silence");
     if(key == "end")    return QObject::tr("End call");
-    if(key == "found")  return QObject::tr("Found it");
+    // The find-my-watch page's button, as stock's Find Hub ("Stop sound")
+    if(key == "found")  return QObject::tr("Stop sound");
     return key;
 }
 
-// At most this many of the phone's own actions (<ax>) and smart replies (<sr>)
-static const int MaxAppActions = 3;
+// At most this many of the phone's own actions (<ax>) and smart replies (<sr>): stock's
+// notification shows ten actions (the phone fits as many as the 512 bytes hold)
+static const int MaxAppActions = 10;
 static const int MaxSmartReplies = 5;
 // The newest messages of a conversation shown (version 4, <ms>)
 static const int MaxMessages = 6;
@@ -98,7 +100,7 @@ QByteArray NotificationService::capabilities()
         // Version 3: smart replies (<sr>), the phone's own actions (<ax>, fed
         // back as ty=app), find my phone (feedback ty=findphone, <findphone>
         // from the phone)
-        "<smartreplies>5</smartreplies><appactions>3</appactions><findphone>1</findphone>"
+        "<smartreplies>5</smartreplies><appactions>10</appactions><findphone>1</findphone>"
         // Version 4: conversations (<th>, <ms>), importance and alert flags
         // (<pr>, <oa>, <og>), categories (<ca>, vb=alarm), app icons (<ic>,
         // written to the icon characteristic; the cache token changes when the
@@ -119,11 +121,17 @@ QByteArray NotificationService::capabilities()
         "<me>1</me>"
         // Each message's own picture (<pc> in an <m>), kept while a message shows it
         "<msgpictures>1</msgpictures>"
+        // Version 5 (W2): the phone answers a reply, an app action and "Open on phone" (<ack>:
+        // ack elements on the notification characteristic), the sub text (<st>) and the
+        // ProgressStyle bar (<pg>)
+        "<ack>1</ack><subtext>1</subtext><progress>1</progress>"
         "</capabilities>";
 }
 
 // The newest messages of a conversation kept, and their longest text
 static const int MaxMessageChars = 300;
+// The sub text (a line under the title)
+static const int MaxSubTextChars = 60;
 
 // <pc><i>ID</i><w>W</w><h>H</h></pc>: a picture, and the size it comes at
 static void readPictureRef(QXmlStreamReader &reader, QString &id, int &width, int &height)
@@ -142,6 +150,48 @@ static void readPictureRef(QXmlStreamReader &reader, QString &id, int &width, in
         id.clear();
 }
 
+// <pg><p>VALUE</p><x>MAX</x><sg>LENGTH:RRGGBB,LENGTH:-</sg></pg> or <pg><i>1</i></pg>: a progress
+// bar (Android 16's ProgressStyle). The segments are kept as the phone sent them when they are
+// at most ten of LENGTH (1 to 3 digits), a colon, and six hex digits or "-"
+static void readProgress(QXmlStreamReader &reader, PhoneNotification::Progress &progress)
+{
+    static const QRegularExpression segments(QStringLiteral(
+        "^[0-9]{1,3}:(?:[0-9a-fA-F]{6}|-)(?:,[0-9]{1,3}:(?:[0-9a-fA-F]{6}|-)){0,9}$"));
+    bool indeterminate = false, haveValue = false;
+    int value = 0, max = 100;
+    QString sg;
+    while(reader.readNextStartElement()) {
+        const QString name = reader.name().toString();
+        const QString text = reader.readElementText().trimmed();
+        if(name == QLatin1String("i")) {
+            indeterminate = text == QLatin1String("1");
+        } else if(name == QLatin1String("p")) {
+            bool ok = false;
+            const int v = text.toInt(&ok);
+            if(ok) { value = v; haveValue = true; }
+        } else if(name == QLatin1String("x")) {
+            bool ok = false;
+            const int x = text.toInt(&ok);
+            if(ok && x > 0)
+                max = qMin(x, 1000000);
+        } else if(name == QLatin1String("sg")) {
+            if(segments.match(text).hasMatch())
+                sg = text;
+        }
+    }
+    progress = PhoneNotification::Progress();
+    if(indeterminate) {
+        progress.present = true;
+        progress.indeterminate = true;
+        progress.segments = sg;
+    } else if(haveValue) {
+        progress.present = true;
+        progress.max = max;
+        progress.value = qBound(0, value, max);
+        progress.segments = sg;
+    }
+}
+
 // <ms><m><s>SENDER</s><t>TEXT</t><me>1</me><pc>..</pc></m>...</ms>: the newest
 // MaxMessages, which are the user's own (<me>1</me>) and their pictures (a message
 // with a picture may have no text)
@@ -149,7 +199,8 @@ static void readMessages(QXmlStreamReader &reader, PhoneNotification &n)
 {
     QList<QPair<QString, QString>> messages;
     QList<bool> own;
-    QList<PhoneNotification::MessagePicture> pictures;
+    QList<PhoneNotification::MessagePicture> pictures, avatars;
+    QList<qint64> times;
     while(reader.readNextStartElement()) {
         if(reader.name() != QLatin1String("m")) {
             reader.skipCurrentElement();
@@ -157,10 +208,21 @@ static void readMessages(QXmlStreamReader &reader, PhoneNotification &n)
         }
         QString sender, text;
         bool me = false;
-        PhoneNotification::MessagePicture picture;
+        PhoneNotification::MessagePicture picture, avatar;
+        qint64 when = 0;
         while(reader.readNextStartElement()) {
             if(reader.name() == QLatin1String("s"))
                 sender = reader.readElementText().simplified();
+            else if(reader.name() == QLatin1String("ts")) {
+                // epoch seconds (milliseconds are taken too), a time in this century
+                bool ok = false;
+                qint64 ts = reader.readElementText().trimmed().toLongLong(&ok);
+                if(ok && ts > 100000000000LL)
+                    ts /= 1000;
+                when = ok && ts >= 1000000000LL && ts <= 4102444800LL ? ts : 0;
+            }
+            else if(reader.name() == QLatin1String("av"))
+                readPictureRef(reader, avatar.id, avatar.width, avatar.height);
             else if(reader.name() == QLatin1String("t"))
                 text = reader.readElementText().trimmed();
             else if(reader.name() == QLatin1String("me"))
@@ -176,16 +238,22 @@ static void readMessages(QXmlStreamReader &reader, PhoneNotification &n)
             messages << qMakePair(sender, text);
             own << me;
             pictures << picture;
+            avatars << avatar;
+            times << when;
         }
     }
     while(messages.size() > MaxMessages) {
         messages.removeFirst();
         own.removeFirst();
         pictures.removeFirst();
+        avatars.removeFirst();
+        times.removeFirst();
     }
     n.messages = messages;
     n.ownMessages = own;
     n.messagePictures = pictures;
+    n.messageAvatars = avatars;
+    n.messageTimes = times;
 }
 
 PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
@@ -229,6 +297,26 @@ PhoneNotification PhoneNotification::parse(QXmlStreamReader &reader)
             n.onlyAlertOnce = reader.readElementText().trimmed() == "1";
         else if(name == QLatin1String("og"))
             n.ongoing = reader.readElementText().trimmed() == "1";
+        else if(name == QLatin1String("st")) {
+            // one line, at most 60 characters
+            n.subText = reader.readElementText().simplified();
+            if(n.subText.length() > MaxSubTextChars)
+                n.subText = n.subText.left(MaxSubTextChars - 1) + QChar(0x2026);
+        }
+        else if(name == QLatin1String("ne"))
+            n.noEmoji = reader.readElementText().trimmed() == "1";
+        else if(name == QLatin1String("pg"))
+            readProgress(reader, n.progress);
+        else if(name == QLatin1String("wh")) {
+            // seconds since 1970 (milliseconds are taken too), a time in this century
+            bool ok = false;
+            qint64 w = reader.readElementText().trimmed().toLongLong(&ok);
+            if(ok && w > 100000000000LL)
+                w /= 1000;
+            n.when = ok && w >= 1000000000LL && w <= 4102444800LL ? w : 0;
+        }
+        else if(name == QLatin1String("sd"))
+            n.starred = reader.readElementText().trimmed() == "1";
         else if(name == QLatin1String("ca"))
             n.category = reader.readElementText().trimmed().left(32);
         else if(name == QLatin1String("ic"))
@@ -280,6 +368,11 @@ QString PhoneNotification::messagesJson() const
         m.insert(QStringLiteral("t"), messages.at(i).second);
         if(ownMessages.value(i, false))
             m.insert(QStringLiteral("me"), true);
+        if(messageTimes.value(i, 0) > 0)
+            m.insert(QStringLiteral("ts"), messageTimes.at(i));
+        const MessagePicture avatar = messageAvatars.value(i);
+        if(!avatar.id.isEmpty())
+            m.insert(QStringLiteral("a"), NotificationService::picturePath(avatar.id));
         const MessagePicture picture = messagePictures.value(i);
         if(!picture.id.isEmpty()) {
             m.insert(QStringLiteral("p"), NotificationService::picturePath(picture.id));
@@ -300,6 +393,12 @@ QStringList PhoneNotification::pictureIds() const
         ids << pictureId;
     for(int i = messagePictures.size() - 1; i >= 0; i--) {
         const QString &id = messagePictures.at(i).id;
+        if(!id.isEmpty() && !ids.contains(id))
+            ids << id;
+    }
+    // The senders' avatars last: they are asked for when the card is shown
+    for(int i = messageAvatars.size() - 1; i >= 0; i--) {
+        const QString &id = messageAvatars.at(i).id;
         if(!id.isEmpty() && !ids.contains(id))
             ids << id;
     }
@@ -360,22 +459,30 @@ bool PhoneNotification::hasEmoji(const QString &text)
  * the watch speaker, stay for the watch's alarms and timers and for the
  * find-my-watch alert (it rings the watch itself, as on Wear OS).
  */
-QString PostPlan::feedbackEvent(const PhoneNotification &n)
+bool PostPlan::isMessage(const PhoneNotification &n)
 {
-    if(n.vibrate.isNull()) // for backwards compatibility
-        return QStringLiteral("notif_strong");
-    if(n.vibrate == QLatin1String("normal"))
-        return QStringLiteral("notif_normal");
-    if(n.vibrate == QLatin1String("ringtone"))
-        return n.phoneActions.contains("found") ? QStringLiteral("ringtone") : QStringLiteral("eos_phone_ringing");
+    return n.category == QLatin1String("msg") || !n.messages.isEmpty();
+}
+
+QString PostPlan::feedbackEvent(const PhoneNotification &n, bool muteRing)
+{
+    if(n.vibrate == QLatin1String("ringtone")) {
+        // the find-my-watch alert always rings; a call rings only with "Mute ring &
+        // notifications" off (the same ring vibration, with the ringtone)
+        if(n.phoneActions.contains("found") || !muteRing)
+            return QStringLiteral("ringtone");
+        return QStringLiteral("eos_phone_ringing");
+    }
     if(n.vibrate == QLatin1String("alarm"))
         // the alarm pattern, repeated until the alarm is acted on or gone
         return QStringLiteral("eos_phone_alarm");
-    return QStringLiteral("notif_strong");
+    // Stock has two notification alerts: the message one and the system one (no strong
+    // alert). ngfd plays their sound only while the mute is off.
+    return isMessage(n) ? QStringLiteral("notif_message") : QStringLiteral("notif_default");
 }
 
 PostPlan PostPlan::decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb,
-                          bool onCharger)
+                          bool onCharger, bool callAllowed)
 {
     PostPlan plan;
     // A banner unless it was sent again after a reconnection, Android calls
@@ -383,12 +490,16 @@ PostPlan PostPlan::decide(const PhoneNotification &n, bool exists, bool contentC
     // is on (alarms and the find-my-watch alert still come through)
     const bool alarm = n.vibrate == QLatin1String("alarm");
     const bool findWatch = n.phoneActions.contains("found");
-    const bool dndSilenced = doNotDisturb && !alarm && !findWatch;
+    const bool dndSilenced = doNotDisturb && !alarm && !findWatch && !callAllowed;
     // On the charger nothing alerts (Wear OS mutes alerting while power is
     // connected, whatever the notification), but the find-my-watch alert: the
     // user asked the watch to ring
     const bool chargerSilenced = onCharger && !findWatch;
-    const bool wouldAlert = !n.resync && !(n.importance > 0 && n.importance <= 2) && !dndSilenced;
+    // An alert the phone muted (<vb>none</vb>: the phone is in use, or the notification is
+    // silent there) has no banner and no wake, as stock's glanceable ("Alert info is
+    // muted"): it goes to the stream quietly. Calls and alarms are not alerts that mute.
+    const bool mutedAlert = n.vibrate == QLatin1String("none") && !n.isCall() && !alarm && !findWatch;
+    const bool wouldAlert = !n.resync && !(n.importance > 0 && n.importance <= 2) && !dndSilenced && !mutedAlert;
     plan.preview = wouldAlert && !chargerSilenced;
     plan.vibrate = plan.preview && n.vibrate != QLatin1String("none");
     if(wouldAlert && chargerSilenced)
@@ -430,6 +541,13 @@ static QString describe(const PhoneNotification &n, int bytes)
     if(n.importance) flags << QString("importance %1").arg(n.importance);
     if(n.onlyAlertOnce) flags << "alert once";
     if(n.ongoing) flags << "ongoing";
+    if(!n.subText.isEmpty()) flags << "sub text";
+    if(n.noEmoji) flags << "no emoji";
+    if(n.progress.present)
+        flags << (n.progress.indeterminate ? QString("progress (indeterminate)")
+                                           : QString("progress %1/%2").arg(n.progress.value).arg(n.progress.max));
+    if(n.when) flags << "when";
+    if(n.starred) flags << "starred";
     if(!n.category.isEmpty()) flags << "category " + n.category;
     if(!n.iconHash.isEmpty()) flags << "icon";
     if(!n.pictureId.isEmpty()) flags << "picture";
@@ -460,7 +578,7 @@ class NotificationsUpdateChrc : public Characteristic
 public:
     NotificationsUpdateChrc(QDBusConnection bus, unsigned int index, NotificationService *service)
       : Characteristic(bus, index, NOTI_UPD_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
-        mJoiner("Notifications", {"insert", "removed", "findphone", "sync"}, MaxUpdateBytes)
+        mJoiner("Notifications", {"insert", "removed", "findphone", "sync", "ack"}, MaxUpdateBytes)
     {
         // A write cut by the disconnection never ends: the next connection starts afresh
         QObject::connect(service, &NotificationService::phoneConnectedChanged, this, [this](bool connected) {
@@ -480,7 +598,7 @@ public slots:
         WakeHold::hold();
 
         mService->setMtu(optionMtu(options));
-        bool posted = false, removed = false;
+        bool posted = false, removed = false, acked = false;
         for(const auto &message : mJoiner.add(value, optionOffset(options))) {
             QXmlStreamReader reader(message.second);
             if(!reader.readNextStartElement()) {
@@ -526,6 +644,25 @@ public slots:
                     continue;
                 }
                 mService->sync(ids, keys);
+            } else if(message.first == "ack") {
+                // <ack><id>ID</id><ty>reply|app|open</ty><ix>N</ix><ok>1|0</ok></ack>: the
+                // phone's answer to what the watch did
+                int id = 0, index = -1;
+                QString type;
+                bool ok = false;
+                while(reader.readNextStartElement()) {
+                    if(reader.name() == QLatin1String("id")) id = reader.readElementText().toInt();
+                    else if(reader.name() == QLatin1String("ty")) type = reader.readElementText().trimmed();
+                    else if(reader.name() == QLatin1String("ix")) index = reader.readElementText().toInt();
+                    else if(reader.name() == QLatin1String("ok")) ok = reader.readElementText().trimmed() == "1";
+                    else reader.skipCurrentElement();
+                }
+                if(reader.hasError()) {
+                    qWarning() << "Notifications: an answer of" << message.second.size() << "bytes could not be read:" << reader.errorString();
+                    continue;
+                }
+                mService->actionAck(id, type, index, ok);
+                acked = true;
             } else if(message.first == "findphone") {
                 // Version 3: <findphone>stop</findphone>, the phone stopped
                 // ringing (found there, or its time ran out)
@@ -545,6 +682,8 @@ public slots:
             WakeHold::release(NotificationService::CloseDelayMs + WakeHold::GRACE_SHORT_MS);
         else if(posted)
             WakeHold::release(WakeHold::GRACE_NOTIFICATION_MS);
+        else if(acked)
+            WakeHold::release(WakeHold::GRACE_SHORT_MS);
     }
 
 private:
@@ -816,6 +955,12 @@ NotificationsDBusApi::NotificationsDBusApi(NotificationService *service)
     connect(service, &NotificationService::findPhoneChanged, this, &NotificationsDBusApi::FindPhoneChanged);
     connect(service, &NotificationService::phoneConnectedChanged, this, &NotificationsDBusApi::PhoneConnectedChanged);
     connect(service, &NotificationService::pictureChanged, this, &NotificationsDBusApi::PictureChanged);
+    connect(service, &NotificationService::actionResult, this, &NotificationsDBusApi::ActionResult);
+}
+
+bool NotificationsDBusApi::ActionAcks()
+{
+    return mService->phoneAnswers();
 }
 
 bool NotificationsDBusApi::Reply(uint notificationId, const QString &text)
@@ -1073,9 +1218,128 @@ void NotificationService::sendFeedback(int phoneId, const QString &type, const Q
     if(!connected)
         line += QStringLiteral(" (no phone connected)");
     qInfo().noquote() << line;
+    if(type == QLatin1String("reply") || type == QLatin1String("app") || type == QLatin1String("open"))
+        trackAction(phoneId, type, type == QLatin1String("app") ? index : -1, connected);
     if(qEnvironmentVariableIntValue("BTSYNCD_LOG_FEEDBACK") == 1
             || MDConfItem(QStringLiteral("/org/asteroidos/btsyncd/log-feedback")).value(false).toBool())
         qInfo().noquote() << "Feedback XML:" << QString::fromUtf8(xml);
+}
+
+void NotificationService::trackAction(int phoneId, const QString &kind, int index, bool sent)
+{
+    const uint lipstickId = mKnownAndroidNotifs.value(phoneId, 0);
+    if(!sent) {
+        reportAction(lipstickId, kind, index, "failed");
+        return;
+    }
+    if(!mPhoneAnswers) {
+        // A phone that does not answer (an older Gadgetbridge): the confirmation is immediate, as
+        // before
+        QMetaObject::invokeMethod(this, [this, lipstickId, kind, index] {
+            reportAction(lipstickId, kind, index, "ok");
+        }, Qt::QueuedConnection);
+        return;
+    }
+    // One timer per action in flight (a few seconds, nothing periodic): "timeout" when the phone
+    // does not answer
+    PendingAction p;
+    p.phoneId = phoneId;
+    p.kind = kind;
+    p.index = index;
+    p.lipstickId = lipstickId;
+    p.token = ++mPendingToken;
+    mPending << p;
+    const int token = p.token;
+    QTimer::singleShot(mActionAckMs, this, [this, token] {
+        for(int i = 0; i < mPending.size(); i++) {
+            if(mPending.at(i).token != token)
+                continue;
+            const PendingAction late = mPending.takeAt(i);
+            reportAction(late.lipstickId, late.kind, late.index, "timeout");
+            return;
+        }
+    });
+}
+
+void NotificationService::actionAck(int phoneId, const QString &type, int index, bool ok)
+{
+    for(int i = 0; i < mPending.size(); i++) {
+        const PendingAction &p = mPending.at(i);
+        if(p.phoneId != phoneId || p.kind != type || (type == QLatin1String("app") && p.index != index))
+            continue;
+        const PendingAction done = mPending.takeAt(i);
+        reportAction(done.lipstickId, done.kind, done.index, ok ? "ok" : "failed");
+        return;
+    }
+    qInfo() << "Answer of the phone for an action nobody waits for (late, or not one of ours):" << type;
+}
+
+void NotificationService::failPendingActions()
+{
+    const QList<PendingAction> pending = mPending;
+    mPending.clear();
+    for(const PendingAction &p : pending)
+        reportAction(p.lipstickId, p.kind, p.index, "failed");
+}
+
+void NotificationService::reportAction(uint lipstickId, const QString &kind, int index, const char *result)
+{
+    qInfo().noquote() << QString("Action %1%2: %3").arg(kind, index >= 0 ? QString(" %1").arg(index) : QString(),
+                                                        QLatin1String(result));
+    emit actionResult(lipstickId, kind, index, QString::fromLatin1(result));
+}
+
+bool NotificationService::muteRingAndNotifications()
+{
+    return MDConfItem(QString::fromLatin1(MuteRingKey)).value(true).toBool();
+}
+
+const char *NotificationService::callException(const PhoneNotification &n, bool newCard)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    for(auto it = mCallersSeen.begin(); it != mCallersSeen.end(); ) {
+        if(now - it.value() > RepeatCallerMs)
+            it = mCallersSeen.erase(it);
+        else
+            ++it;
+    }
+    // The caller is remembered as a hash of their text, in memory only, and never logged
+    if(newCard)
+        mCallVerdicts.remove(n.id);
+    auto verdict = mCallVerdicts.find(n.id);
+    if(verdict == mCallVerdicts.end()) {
+        CallVerdict v;
+        const QString who = QString::fromLatin1(QCryptographicHash::hash(n.summary.toUtf8(), QCryptographicHash::Sha1).toHex());
+        // A second call from the same caller within the threshold; a call the phone posts again
+        // after a reconnection is not a new call
+        v.repeat = !n.resync && mCallersSeen.contains(who);
+        if(!n.resync)
+            mCallersSeen.insert(who, now);
+        v.starred = n.starred;
+        v.at = now;
+        while(mCallVerdicts.size() >= 32) {
+            auto oldest = mCallVerdicts.begin();
+            for(auto it = mCallVerdicts.begin(); it != mCallVerdicts.end(); ++it) {
+                if(it.value().at < oldest.value().at)
+                    oldest = it;
+            }
+            mCallVerdicts.erase(oldest);
+        }
+        verdict = mCallVerdicts.insert(n.id, v);
+    } else if(n.starred) {
+        verdict->starred = true;
+    }
+    if(!mDoNotDisturb && !mModeQuiet)
+        return nullptr;
+    // Every mode that is on must let the call through: Do Not Disturb and Bedtime allow
+    // starred contacts and repeat callers, Theater none
+    if(mTheaterMode)
+        return nullptr;
+    if(verdict->starred)
+        return "starred";
+    if(verdict->repeat)
+        return "repeat";
+    return nullptr;
 }
 
 QString NotificationService::appActionKey(int index)
@@ -1118,6 +1382,10 @@ void NotificationService::updatePhoneConnected(int flushDelayMs)
     // missing are asked for again when it is back (its resync names them)
     if(!connected) {
         setFindingPhone(false);
+        // What the watch sent and waits for the phone to answer will not be answered; a phone that
+        // comes back says again whether it answers
+        failPendingActions();
+        mPhoneAnswers = false;
         const QStringList waiting = mPictureRequested.keys();
         mPictureRequested.clear();
         for(const QString &id : waiting) {
@@ -1341,6 +1609,31 @@ void NotificationService::post(const PhoneNotification &n)
     if(!n.resync)
         mDismissedAway.remove(id);
 
+    // Ongoing and non-clearable notifications (a timer, a download, a navigation) are not
+    // bridged, as stock ("When notifications aren't bridged"); calls, alarms, the
+    // find-my-watch alert (their own screens) and a progress bar of Android 16's ProgressStyle
+    // (a live update: a ride, a delivery) still come. One that became ongoing loses its card.
+    if(n.ongoing && !n.isCall() && !isCallCard(n.phoneActions) && n.vibrate != QLatin1String("alarm")
+            && n.category != QLatin1String("alarm") && !n.phoneActions.contains("found") && !n.progress.present) {
+        uint card = mKnownAndroidNotifs.value(id, 0);
+        if(!card && !n.thread.isEmpty())
+            card = mThreads.value(n.thread, 0);
+        if(!card && !n.key.isEmpty())
+            card = mKeys.value(n.key, 0);
+        if(card) {
+            qInfo() << "Phone notification" << id << "is ongoing: not shown, its card goes";
+            for(auto it = mKnownAndroidNotifs.begin(); it != mKnownAndroidNotifs.end(); ) {
+                if(it.value() == card)
+                    it = mKnownAndroidNotifs.erase(it);
+                else
+                    ++it;
+            }
+            closeNow(card);
+        } else
+            qInfo() << "Phone notification" << id << "is ongoing: not shown";
+        return;
+    }
+
     // The card: by the phone's id, else (version 4) by its conversation,
     // which the phone posts under a new id for each new message
     uint replacesId = mKnownAndroidNotifs.value(id, 0);
@@ -1379,7 +1672,10 @@ void NotificationService::post(const PhoneNotification &n)
     const QString shownBody = n.shownBody();
     const uint content = contentHash(n.summary, shownBody);
     const bool contentChanged = !replacesId || mContent.value(replacesId) != content;
-    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb || mModeQuiet, quietOnCharger());
+    // A call that Do Not Disturb or Bedtime lets through: a starred contact, a repeat caller
+    const char *callPass = n.isCall() ? callException(n, replacesId == 0) : nullptr;
+    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb || mModeQuiet, quietOnCharger(),
+                                     callPass != nullptr);
     // The update that brings the watch's own reply: in place, quietly
     if(replacesId && mRepliedAt.contains(replacesId)) {
         const qint64 repliedAt = mRepliedAt.take(replacesId);
@@ -1402,6 +1698,30 @@ void NotificationService::post(const PhoneNotification &n)
         hints.insert(KeyHint, n.key);
     if(!n.category.isEmpty())
         hints.insert(CategoryHint, n.category);
+    const bool findWatch = n.phoneActions.contains("found");
+    // The card stays after an action, as stock's (it sends the action and waits for the phone
+    // to update or remove the card); lipstick removes a card that is not resident. The
+    // find-my-watch alert is the watch's own page: its action ends it.
+    if(!findWatch)
+        hints.insert(ResidentHint, true);
+    else
+        hints.insert(FindWatchHint, true);
+    if(callPass && plan.preview)
+        hints.insert(CallExceptionHint, QString::fromLatin1(callPass));
+    if(!n.subText.isEmpty())
+        hints.insert(SubTextHint, n.subText);
+    if(n.noEmoji)
+        hints.insert(NoEmojiHint, true);
+    if(n.progress.present) {
+        if(n.progress.indeterminate) {
+            hints.insert(ProgressIndeterminateHint, true);
+        } else {
+            hints.insert(ProgressHint, n.progress.value);
+            hints.insert(ProgressMaxHint, n.progress.max);
+        }
+        if(!n.progress.segments.isEmpty())
+            hints.insert(ProgressSegmentsHint, n.progress.segments);
+    }
     // The conversation, message by message, for the full view (the body has it as lines)
     if(!n.messages.isEmpty())
         hints.insert(MessagesHint, n.messagesJson());
@@ -1424,7 +1744,7 @@ void NotificationService::post(const PhoneNotification &n)
         hints.insert("x-nemo-feedback", "notif_silent");
         hints.insert("x-nemo-feedback-suppressed", true);
     } else
-        hints.insert("x-nemo-feedback", PostPlan::feedbackEvent(n));
+        hints.insert("x-nemo-feedback", PostPlan::feedbackEvent(n, muteRingAndNotifications()));
 
     hints.insert("urgency", 3);
 
@@ -1441,6 +1761,10 @@ void NotificationService::post(const PhoneNotification &n)
         if(!stamp.isEmpty())
             hints.insert("x-nemo-timestamp", stamp);
     }
+    // Ordered by the phone's "when" when the notification shows it (stock: newest first by
+    // its "when", else its post time)
+    if(n.when > 0 && !isCall)
+        hints.insert("x-nemo-timestamp", QDateTime::fromSecsSinceEpoch(n.when).toUTC().toString(Qt::ISODate));
 
     // Freedesktop actions: identifier, label pairs. The launcher shows them
     // as buttons; lipstick reports a press through ActionInvoked.
@@ -1476,7 +1800,7 @@ void NotificationService::post(const PhoneNotification &n)
         qInfo() << "Phone notification" << id << ": new content for lipstick notification" << replacesId << ", posting it anew";
         mKnownAndroidNotifs.remove(id);
         forget(replacesId);
-        mActioned.insert(replacesId);
+        markActioned(replacesId);
         notifyApp.call(QDBus::NoBlock, "CloseNotification", replacesId);
         replacesId = 0;
     }
@@ -1710,7 +2034,18 @@ void NotificationService::ActionInvoked(uint replacesId, const QString &actionKe
         sendFeedback(id, "app", QString(), appIndex);
     else
         sendFeedback(id, actionKey);
-    mActioned.insert(replacesId);
+    markActioned(replacesId);
+}
+
+void NotificationService::markActioned(uint lipstickId)
+{
+    mActioned.insert(lipstickId, QDateTime::currentMSecsSinceEpoch());
+}
+
+bool NotificationService::wasActioned(uint lipstickId)
+{
+    const auto it = mActioned.constFind(lipstickId);
+    return it != mActioned.constEnd() && QDateTime::currentMSecsSinceEpoch() - it.value() <= ActionedMs;
 }
 
 void NotificationService::NotificationClosed(uint replacesId, uint reason)
@@ -1718,7 +2053,7 @@ void NotificationService::NotificationClosed(uint replacesId, uint reason)
     const uint dismissedByUser = 2;  // freedesktop / lipstick close reason
     int id = mKnownAndroidNotifs.key(replacesId, 0);
     if(id) {
-        if(reason == dismissedByUser && !mActioned.contains(replacesId))
+        if(reason == dismissedByUser && !wasActioned(replacesId))
             sendFeedback(id, "dismiss");
         mKnownAndroidNotifs.remove(id);
     }

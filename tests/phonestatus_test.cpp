@@ -188,6 +188,17 @@ int main(int argc, char **argv)
     CHECK(api(driver, "DoNotDisturb").toBool() == true);
     CHECK(notifications.doNotDisturb());
     CHECK(phone.phoneVersion() == 4);
+    // The phone says it answers what the watch does (<ak>1</ak>): not before, kept over a status without
+    // it (partial statuses do not repeat it), gone with the phone
+    CHECK(!notifications.phoneAnswers());
+    writeStatus(driver, "<ps><v>4</v><bl>83</bl><bc>1</bc><ak>0</ak></ps>");
+    spin(150);
+    CHECK(!notifications.phoneAnswers());
+    writeStatus(driver, "<ps><v>4</v><bl>83</bl><bc>1</bc><dnd>priority</dnd><lc>en-NZ</lc><ak>1</ak></ps>");
+    CHECK(waitFor([&] { return notifications.phoneAnswers(); }));
+    writeStatus(driver, "<ps><v>4</v></ps>");
+    spin(150);
+    CHECK(notifications.phoneAnswers());
     // From the phone: nothing goes back to it
     spin(200);
     CHECK(collector.requests.isEmpty());
@@ -251,6 +262,7 @@ int main(int argc, char **argv)
     notifications.setLinkConnected(false);
     CHECK(waitFor([&] { return collector.connectedChanges.size() == changes + 1; }));
     CHECK(collector.connectedChanges.last() == false);
+    CHECK(!notifications.phoneAnswers());       // the phone that answered is gone
     CHECK(api(driver, "Connected").toBool() == false);
     // the watch's DND meanwhile is not sent into the void
     CHECK(api(driver, "SetDoNotDisturb", {true}).toBool() == false);
