@@ -1,6 +1,7 @@
 set(
 	SRC
 	main.cpp
+	callaudio.cpp
 	notificationservice.cpp
 	weatherservice.cpp
 	mediaservice.cpp
@@ -35,6 +36,8 @@ set(
 )
 set(
 	HEADERS
+	callaudio.h
+	callcontrol.h
 	notificationservice.h
 	weatherservice.h
 	mediaservice.h

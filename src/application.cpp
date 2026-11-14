@@ -90,6 +90,11 @@ void Application::setPhoneLink(bool connected)
     mNotifications->setLinkConnected(connected);
 }
 
+void Application::setCallControl(CallControl *calls)
+{
+    mNotifications->setCallControl(calls);
+}
+
 /* Exposed slots */
 ManagedObjectList Application::GetManagedObjects()
 {

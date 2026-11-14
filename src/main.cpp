@@ -26,6 +26,7 @@
 #include "advertisement.h"
 #include "bluezmanager.h"
 #include "contactnames.h"
+#include "callaudio.h"
 
 int main(int argc, char **argv)
 {
@@ -58,6 +59,12 @@ int main(int argc, char **argv)
     // NotificationService::setLinkConnected)
     QObject::connect(&bm, &BlueZManager::connectedChanged, &app, [&app, &bm] { app.setPhoneLink(bm.connected()); });
     app.setPhoneLink(bm.connected());
+    // The phone's calls on the watch: its hands-free unit (oFono); the call cards' answer,
+    // reject and end go to it first (CallControl)
+    CallAudio calls;
+    app.setCallControl(&calls);
+    QObject::connect(&bm, &BlueZManager::connectedChanged, &calls, [&calls, &bm] { calls.setPhoneLink(bm.connected()); });
+    calls.setPhoneLink(bm.connected());
     // the phone's contact names go with its bond (unpaired on the watch, or reset)
     QObject::connect(&bm, &BlueZManager::noDevicePaired, &app, [] { ContactNames::remove("no phone is paired"); });
 

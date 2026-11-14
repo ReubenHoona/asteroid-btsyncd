@@ -2031,11 +2031,27 @@ void NotificationService::ActionInvoked(uint replacesId, const QString &actionKe
     // A reply needs its text: it comes through Reply(), not as a bare action
     if(!id || actionKey == "reply" || actionKey == "default")
         return;
-    const int appIndex = appActionIndex(actionKey);
+    // The buttons of a call card: the watch is the phone's hands-free unit (stock Wear OS), a
+    // call it knows is answered (audio on the watch), declined or ended there
+    QString key = actionKey;
+    if(isCallCard(mPhoneActions.value(replacesId))) {
+        if(mCallControl && actionKey == "answer" && mCallControl->answerOnWatch()) {
+            markActioned(replacesId);
+            return;
+        }
+        if(mCallControl && (actionKey == "reject" || actionKey == "end") && mCallControl->hangUp()) {
+            markActioned(replacesId);
+            return;
+        }
+        // "Answer on phone" (More > Call option): the phone's answer, the audio stays there
+        if(actionKey == "answer-phone")
+            key = "answer";
+    }
+    const int appIndex = appActionIndex(key);
     if(appIndex >= 0)
         sendFeedback(id, "app", QString(), appIndex);
     else
-        sendFeedback(id, actionKey);
+        sendFeedback(id, key);
     markActioned(replacesId);
 }
 

@@ -648,6 +648,81 @@ int main(int argc, char **argv)
     }
     service.setCallGraceMs(NotificationService::CallGraceMs);
 
+    // The call card's buttons with the watch's hands-free link (CallControl): a call it knows is
+    // answered (audio on the watch), declined or ended there and nothing goes to the phone; one it
+    // does not know goes to the phone; "answer-phone" is the phone's answer
+    {
+        struct FakeControl : CallControl {
+            int answers = 0, hangups = 0;
+            bool canAnswer = true, canHang = true;
+            bool answerOnWatch() override { answers++; return canAnswer; }
+            bool hangUp() override { hangups++; return canHang; }
+        } ctl;
+        service.setCallControl(&ctl);
+        const int before = postedCount(fake);
+        collector.feedback.clear();
+        write(driver, "<insert><id>140</id><vb>ringtone</vb><an>Phone</an><su>Ring140</su><ac>answer,reject,silence</ac></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == before + 1; }));
+        uint ring = 0;
+        {
+            QMutexLocker l(&fake.lock);
+            ring = fake.nextId - 1;
+        }
+        emitActionInvoked(fakeConn, ring, "answer");
+        CHECK(waitFor([&] { return ctl.answers == 1; }));
+        emitActionInvoked(fakeConn, ring, "reject");
+        CHECK(waitFor([&] { return ctl.hangups == 1; }));
+        spin(400);
+        CHECK(collector.feedback.isEmpty());
+        // the link does not know the call
+        ctl.canAnswer = false;
+        ctl.canHang = false;
+        emitActionInvoked(fakeConn, ring, "answer");
+        CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
+        CHECK(collector.feedback == "<action><id>140</id><ty>answer</ty></action>");
+        collector.feedback.clear();
+        emitActionInvoked(fakeConn, ring, "reject");
+        CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
+        CHECK(collector.feedback == "<action><id>140</id><ty>reject</ty></action>");
+        // Answer on phone: the phone's answer, the link is not asked
+        collector.feedback.clear();
+        const int asked = ctl.answers;
+        ctl.canAnswer = true;
+        emitActionInvoked(fakeConn, ring, "answer-phone");
+        CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
+        CHECK(collector.feedback == "<action><id>140</id><ty>answer</ty></action>");
+        CHECK(ctl.answers == asked);
+        // A call in progress: End
+        collector.feedback.clear();
+        ctl.canHang = true;
+        write(driver, "<insert><id>141</id><vb>none</vb><an>Ongoing call</an><su>Ring141</su><ac>end</ac></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == before + 2; }));
+        uint ongoing = 0;
+        {
+            QMutexLocker l(&fake.lock);
+            ongoing = fake.nextId - 1;
+        }
+        const int hung = ctl.hangups;
+        emitActionInvoked(fakeConn, ongoing, "end");
+        CHECK(waitFor([&] { return ctl.hangups == hung + 1; }));
+        spin(300);
+        CHECK(collector.feedback.isEmpty());
+        // Not a call card: never asked
+        write(driver, "<insert><id>142</id><vb>none</vb><an>Mail</an><su>Max142</su><bo>Hi</bo><ac>open,mute</ac></insert>");
+        CHECK(waitFor([&] { return postedCount(fake) == before + 3; }));
+        uint mail = 0;
+        {
+            QMutexLocker l(&fake.lock);
+            mail = fake.nextId - 1;
+        }
+        emitActionInvoked(fakeConn, mail, "mute");
+        CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
+        CHECK(collector.feedback == "<action><id>142</id><ty>mute</ty></action>");
+        CHECK(ctl.hangups == hung + 1 && ctl.answers == asked);
+        service.setCallControl(nullptr);
+        collector.feedback.clear();
+    }
+
     // Framing. Split inside the closing tag: still posted
     int count = postedCount(fake);
     write(driver, "<insert><id>95</id><vb>none</vb><an>Mail</an><su>Lee</su><bo>Split</bo></ins");

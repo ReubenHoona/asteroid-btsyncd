@@ -26,6 +26,7 @@
 #include "service.h"
 #include "common.h"
 
+class CallControl;
 class NotificationService;
 
 typedef QMap<QString, QVariantMap> InterfaceList;
@@ -44,6 +45,8 @@ public:
     void addService(Service *service);
     // The phone's BLE link (BlueZManager), for the services
     void setPhoneLink(bool connected);
+    // Who runs the call cards' buttons on the watch's hands-free link
+    void setCallControl(CallControl *calls);
 
 private:
     QString mPath;

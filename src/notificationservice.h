@@ -26,6 +26,7 @@
 #include <QStringList>
 #include <QVariant>
 
+#include "callcontrol.h"
 #include "service.h"
 
 class BatteryStatus;
@@ -457,6 +458,11 @@ public:
     // is back), so the subscription alone does not say the phone is gone. Until
     // this is called (the tests), the subscription decides.
     void setLinkConnected(bool connected);
+    // The watch's hands-free link: it runs the call cards' answer, reject and end for the
+    // calls it knows (on the watch, with the call audio); "answer-phone" answers on the
+    // phone, the audio stays there. Without it, or for a call it does not know, the action
+    // goes to the phone as before.
+    void setCallControl(CallControl *calls) { mCallControl = calls; }
     // After the link is back: the phone has set itself up again by then (service
     // discovery, its subscriptions): queued dismissals are sent
     static const int PhoneSetupMs = 5000;
@@ -559,6 +565,7 @@ private:
     // The callers that rang (a hash of their text, never the text) and when
     QHash<QString, qint64> mCallersSeen;
     QHash<uint, QStringList> mPhoneActions;
+    CallControl *mCallControl = nullptr;
     QHash<uint, QList<QVariant>> mCallNotify;
     QHash<uint, QString> mTimestamps;
     QDBusServiceWatcher *mLipstickWatcher = nullptr;
