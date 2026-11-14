@@ -80,7 +80,7 @@ void CTS::parseCurrentTime(QByteArray& bytes)
 
     QDateTime newTime(QDate(year, month, day), QTime(hour, minute, second));
     newTime.setTimeZone(QTimeZone::systemTimeZone());
-    setSystemTime(newTime);
+    setSystemTimeFromPhone(newTime);
 }
 
 void CTS::TimeCharacteristicPropertiesChanged(QString /* interfaceName */,

@@ -15,6 +15,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <MDConfItem>
 #include <QDateTime>
 #include <QDBusInterface>
 #include <QDBusMessage>
@@ -44,3 +45,28 @@ bool setSystemTime(const QDateTime& dateTime) {
     return true;
 }
 
+
+bool autoTimeEnabled()
+{
+    return MDConfItem(QString::fromLatin1(AutoTimeKey)).value(true).toBool();
+}
+
+bool autoTimeZoneEnabled()
+{
+    return MDConfItem(QString::fromLatin1(AutoTimeZoneKey)).value(true).toBool();
+}
+
+bool setSystemTimeFromPhone(const QDateTime& dateTime)
+{
+    if (!autoTimeEnabled()) {
+        qInfo("Time from the phone not applied: Automatic date & time is off");
+        return false;
+    }
+    if (!setSystemTime(dateTime))
+        return false;
+    // once: the key is written only when it is not true yet
+    MDConfItem phoneSet(QString::fromLatin1(PhoneSetKey));
+    if (!phoneSet.value(false).toBool())
+        phoneSet.set(true);
+    return true;
+}

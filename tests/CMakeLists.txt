@@ -157,6 +157,17 @@ add_executable(heartrate_test heartrate_test.cpp ../src/heartrateservice.cpp
 target_include_directories(heartrate_test PRIVATE ../src)
 target_link_libraries(heartrate_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
 
+# FP-B1: the phone's time against Settings > Date & time (a fake timedate1, with a dconf service)
+add_executable(timeservice_test timeservice_test.cpp ../src/timeservice.cpp ../src/settime.cpp
+	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
+target_include_directories(timeservice_test PRIVATE ../src)
+target_link_libraries(timeservice_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE)
+
+# FP-B1: vibrate on connectivity change (a fake ngfd, with a dconf service)
+add_executable(connectivity_test connectivity_test.cpp ../src/connectivityfeedback.cpp ../src/wakehold.cpp)
+target_include_directories(connectivity_test PRIVATE ../src)
+target_link_libraries(connectivity_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+
 foreach(t weather_test calendar_test phonedata_test messages_test)
 	if(TARGET ${t})
 		target_compile_definitions(${t} PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

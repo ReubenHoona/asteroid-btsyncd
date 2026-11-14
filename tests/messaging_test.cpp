@@ -214,6 +214,7 @@ int main(int argc, char **argv)
         return 2;
     }
     MDConfItem(NotificationService::QuietOnChargerKey).unset();
+    MDConfItem(NotificationService::SilenceOffWristKey).unset();
 
     QThread fakeThread;
     fakeThread.start();
@@ -381,6 +382,78 @@ int main(int argc, char **argv)
     MDConfItem(NotificationService::QuietOnChargerKey).unset();
     CHECK(waitFor([&] { return api(driver, "QuietOnCharger").toBool(); }));
     CHECK(quiet(post(driver, fake, "<insert><id>608</id><vb>normal</vb><an>Example Chat</an><su>Alex Example</su><bo>Four</bo><ac>reply,mute</ac></insert>")));
+
+    // FP-B1 CR-10: silence-off-wrist (default true) replaces quiet-on-charger; the old key counts only while the
+    // new one was never written; off the wrist counts only when the launcher's mirror says the sensor is there
+    {
+        CHECK(QByteArray(NotificationService::SilenceOffWristKey) == "/org/asteroidos/notifications/silence-off-wrist");
+        CHECK(QByteArray(NotificationService::OffBodyKey) == "/org/asteroidos/sensors/off-body");
+        CHECK(QByteArray(NotificationService::OffBodyAvailableKey) == "/org/asteroidos/sensors/off-body-available");
+        MDConfItem sw(NotificationService::SilenceOffWristKey), old(NotificationService::QuietOnChargerKey);
+        MDConfItem avail(NotificationService::OffBodyAvailableKey), off(NotificationService::OffBodyKey);
+        // long-lived readers to poll: a new MDConfItem for every poll starves the writes under qemu
+        MDConfItem rSw(NotificationService::SilenceOffWristKey), rOld(NotificationService::QuietOnChargerKey);
+        MDConfItem rAvail(NotificationService::OffBodyAvailableKey), rOff(NotificationService::OffBodyKey);
+        const auto effective = [&]() { return rSw.value().isValid() ? rSw.value().toBool() : rOld.value(true).toBool(); };
+        const auto until = [&](const std::function<bool()> &cond) { return waitFor(cond, 15000); };
+        sw.unset();
+        old.unset();
+        avail.unset();
+        off.unset();
+        CHECK(until([&] { return !rSw.value().isValid() && !rOld.value().isValid() && !rAvail.value().isValid() && !rOff.value().isValid(); }));
+        CHECK(NotificationService::silenceSwitch());   // both unset: on
+        // the retired key is read while the new one is unset
+        old.set(false);
+        CHECK(until([&] { return !effective(); }));
+        CHECK(!NotificationService::silenceSwitch());
+        chargerSignal(mce, "on");
+        spin(300);
+        CHECK(!api(driver, "QuietOnCharger").toBool());
+        CHECK(alerts(post(driver, fake, "<insert><id>701</id><vb>normal</vb><an>Example Chat</an><su>Alex Example</su><bo>a</bo><ac>reply,mute</ac></insert>")));
+        // the new key wins over the old one, either way
+        sw.set(true);
+        CHECK(until([&] { return rSw.value().isValid() && rSw.value().toBool(); }));
+        CHECK(until([&] { return api(driver, "QuietOnCharger").toBool(); }));
+        CHECK(quiet(post(driver, fake, "<insert><id>702</id><vb>normal</vb><an>Example Chat</an><su>Alex Example</su><bo>b</bo><ac>reply,mute</ac></insert>")));
+        sw.set(false);
+        old.set(true);
+        CHECK(until([&] { return rSw.value().isValid() && !rSw.value().toBool() && rOld.value(false).toBool(); }));
+        CHECK(!NotificationService::silenceSwitch());
+        CHECK(alerts(post(driver, fake, "<insert><id>703</id><vb>normal</vb><an>Example Chat</an><su>Alex Example</su><bo>c</bo><ac>reply,mute</ac></insert>")));
+        chargerSignal(mce, "off");
+        CHECK(until([&] { return !api(driver, "QuietOnCharger").toBool(); }));
+
+        // off the wrist: only when the sensor is known (off-body-available)
+        sw.set(true);
+        old.unset();
+        off.set(true);
+        CHECK(until([&] { return rSw.value().toBool() && !rOld.value().isValid() && rOff.value(false).toBool(); }));
+        CHECK(NotificationService::silenceSwitch());
+        CHECK(alerts(post(driver, fake, "<insert><id>704</id><vb>normal</vb><an>Example Chat</an><su>Alex Example</su><bo>d</bo><ac>reply,mute</ac></insert>")));
+        avail.set(true);
+        CHECK(until([&] { return rAvail.value(false).toBool(); }));
+        {
+            const Posted p = post(driver, fake, "<insert><id>705</id><vb>strong</vb><an>Example Chat</an><su>Alex Example</su><bo>e</bo><ac>reply,mute</ac></insert>");
+            CHECK(quiet(p));   // the card still comes, quietly
+            CHECK(p.body == "e");
+        }
+        // the find-my-watch alert still rings
+        CHECK(alerts(post(driver, fake, "<insert><id>-79</id><vb>ringtone</vb><an>Find my watch</an><su>Gadgetbridge</su><ac>found</ac></insert>")));
+        // the switch off: alerting
+        sw.set(false);
+        CHECK(until([&] { return !rSw.value(true).toBool(); }));
+        CHECK(alerts(post(driver, fake, "<insert><id>706</id><vb>normal</vb><an>Example Chat</an><su>Alex Example</su><bo>f</bo><ac>reply,mute</ac></insert>")));
+        // back on the wrist: alerting
+        sw.set(true);
+        off.set(false);
+        CHECK(until([&] { return rSw.value(false).toBool() && !rOff.value(true).toBool(); }));
+        CHECK(alerts(post(driver, fake, "<insert><id>707</id><vb>normal</vb><an>Example Chat</an><su>Alex Example</su><bo>g</bo><ac>reply,mute</ac></insert>")));
+        sw.unset();
+        old.unset();
+        avail.unset();
+        off.unset();
+        CHECK(until([&] { return !rSw.value().isValid() && !rAvail.value().isValid() && !rOff.value().isValid(); }));
+    }
 
     // Unplugged: alerting again
     chargerSignal(mce, "off");

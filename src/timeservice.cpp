@@ -61,7 +61,7 @@ void TimeSetChrc::WriteValue(QByteArray value, QVariantMap)
         qWarning("Time: not a date, ignored");
         return;
     }
-    setSystemTime(newTime);
+    setSystemTimeFromPhone(newTime);
     if (flag24 >= 0)
         emit phone24hFormat(flag24 == 1);
 }

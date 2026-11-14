@@ -123,10 +123,11 @@ struct PhoneNotification
  *            message in a conversation): the old card goes, a new one comes
  *            at the top, with banner and vibration
  * preview: with a banner; vibrate: with the phone's vibration pattern.
- * onCharger: the watch is on its charger and quiet there (as Wear OS's
- * SysUI, OffBodyAlertingMuter: alerting is muted while power is connected):
- * no banner, no vibration, but for the find-my-watch alert. quiet says why a
- * notification that would have alerted does not (for the log), else nullptr.
+ * onCharger: the watch is on its charger or off the wrist and quiet there (as Wear OS's
+ * SysUI, OffBodyAlertingMuter: alerting is muted while power is connected or the watch
+ * is off body): no banner, no vibration, but for the find-my-watch alert. quiet (the
+ * quietReason given) says why a notification that would have alerted does not (for
+ * the log), else nullptr.
  * callAllowed: a call that Do Not Disturb or Bedtime lets through (a starred contact
  * or a repeat caller, as stock's zen policy).
  */
@@ -139,7 +140,8 @@ struct PostPlan
     const char *quiet = nullptr;
 
     static PostPlan decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb,
-                           bool onCharger = false, bool callAllowed = false);
+                           bool onCharger = false, bool callAllowed = false,
+                           const char *quietReason = "on the charger");
     // The ngfd event (lipstick's x-nemo-feedback) of a notification that
     // vibrates, from the phone's <vb>. Stock's sounds: a message plays the message
     // alert, every other notification the system one (events notif_message and
@@ -438,14 +440,49 @@ public:
     bool setAppNotifications(uint notificationId, bool enabled);
 
     /*
-     * Quiet on the charger, as Wear OS: while mce says the charger is on, phone
+     * Quiet on the charger and off the wrist, as Wear OS (SysUI OffBodyAlertingMuter):
+     * while mce says the charger is on, or the watch is off the wrist, phone
      * notifications come without banner or vibration (the find-my-watch alert still
-     * rings); dconf /org/asteroidos/notifications/quiet-on-charger false turns it off.
+     * rings). Settings > Vibration > "Silence when off wrist" is the dconf key
+     * SilenceOffWristKey (default true; contract row CR-10). The retired
+     * QuietOnChargerKey of image 44 is read only while SilenceOffWristKey is unset.
+     * Off the wrist counts only while the launcher's mirror of the sensor hub says
+     * it knows (OffBodyAvailableKey true) and OffBodyKey is true (CR-44).
      * The charger's state comes from mce (BatteryStatus), or setOnCharger (the tests).
      */
+    static constexpr const char *SilenceOffWristKey = "/org/asteroidos/notifications/silence-off-wrist";
     static constexpr const char *QuietOnChargerKey = "/org/asteroidos/notifications/quiet-on-charger";
+    static constexpr const char *OffBodyKey = "/org/asteroidos/sensors/off-body";
+    static constexpr const char *OffBodyAvailableKey = "/org/asteroidos/sensors/off-body-available";
+    // The switch: SilenceOffWristKey, else the retired QuietOnChargerKey, else true
+    static bool silenceSwitch();
     bool onCharger() const;
+    // The charger part only (the QuietOnCharger call of the D-Bus API)
     bool quietOnCharger() const;
+    // The watch is known to be off the wrist and the switch is on
+    bool quietOffWrist() const;
+
+    /*
+     * Settings > Modes > Customize (CR-30): /org/asteroidos/modes/MODE/starred and
+     * /repeat, MODE do-not-disturb, bedtime or theater; the defaults are stock's
+     * (Do Not Disturb and Bedtime allow both, Theater none).
+     */
+    static constexpr const char *ModeKeyBase = "/org/asteroidos/modes/";
+    static bool modeAllows(const QString &mode, const QString &what);
+
+    /*
+     * Phone apps in Settings > Notifications > App notifications (CR-20):
+     * BlockedPackagesKey (list of Android package names) is what the user switched
+     * off: the inserts of those packages are dropped (and their card goes);
+     * KnownAppsKey (list of "PACKAGE|NAME", at most MaxKnownApps) is what btsyncd
+     * has seen, written when a package is new or its name changed.
+     */
+    static constexpr const char *BlockedPackagesKey = "/org/asteroidos/notifications/blocked-packages";
+    static constexpr const char *KnownAppsKey = "/org/asteroidos/notifications/known-apps";
+    static const int MaxKnownApps = 200;
+    static bool isBlockedPackage(const QString &package);
+    // true if the list was written
+    static bool learnApp(const QString &package, const QString &name);
     void setOnCharger(bool on) { mChargerOverride = on ? 1 : 0; }
 
     // Find my phone (see NotificationsDBusApi::FindPhone)
@@ -542,6 +579,9 @@ private:
     // cache within its limits
     void schedulePicturePrune();
     void prunePictures();
+    // The card the phone notification n belongs to goes (by id, conversation or key): the card's
+    // lipstick id, 0 if it had none
+    uint closeCardOf(const PhoneNotification &n);
 
     NotificationsFeedbackChrc *mFeedback;
     // mce's charger state (quiet on the charger); -1: mce's, else setOnCharger's

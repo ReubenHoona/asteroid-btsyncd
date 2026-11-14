@@ -783,6 +783,212 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { QMutexLocker l(&fake.lock); return fake.closed.size() > closedBefore && fake.closed.contains(card); }));
     }
 
+    // ---- FP-B1 CR-30: modes/<mode>/{starred,repeat} replace the hard-coded rule for calls
+    {
+        // the key names are the contract's
+        CHECK(QByteArray(NotificationService::ModeKeyBase) == "/org/asteroidos/modes/");
+        const char *modes[] = {"do-not-disturb", "bedtime", "theater"};
+        for(const char *m : modes) {
+            MDConfItem(QString("/org/asteroidos/modes/%1/starred").arg(m)).unset();
+            MDConfItem(QString("/org/asteroidos/modes/%1/repeat").arg(m)).unset();
+        }
+        spin(300);
+        // stock's defaults without a key
+        CHECK(NotificationService::modeAllows("do-not-disturb", "starred") && NotificationService::modeAllows("do-not-disturb", "repeat"));
+        CHECK(NotificationService::modeAllows("bedtime", "starred") && NotificationService::modeAllows("bedtime", "repeat"));
+        CHECK(!NotificationService::modeAllows("theater", "starred") && !NotificationService::modeAllows("theater", "repeat"));
+
+        const auto setMode = [&](const char *mode, const char *what, bool on) {
+            MDConfItem(QString("/org/asteroidos/modes/%1/%2").arg(mode, what)).set(on);
+            CHECK(waitFor([&] { return NotificationService::modeAllows(mode, what) == on; }));
+        };
+        const auto unsetMode = [&](const char *mode) {
+            MDConfItem(QString("/org/asteroidos/modes/%1/starred").arg(mode)).unset();
+            MDConfItem(QString("/org/asteroidos/modes/%1/repeat").arg(mode)).unset();
+            spin(300);
+        };
+        const auto call = [&](int id, const char *who, bool starred) {
+            write(driver, QByteArray("<insert><id>") + QByteArray::number(id) + "</id><vb>ringtone</vb><an>Phone</an><su>" + who +
+                          "</su><ac>answer,reject</ac>" + (starred ? "<sd>1</sd>" : "") + "</insert>");
+            CHECK(next());
+            return lastPosted(fake);
+        };
+        const auto rings = [](const Posted &p) {
+            return p.hints.contains("x-nemo-preview-summary") && p.hints.value("x-nemo-feedback").toString() == "eos_phone_ringing";
+        };
+        const auto exception = [](const Posted &p) { return p.hints.value("x-asteroid-call-exception").toString(); };
+        // a repeat caller: a second call from the same text (unique per use, the memory is 15 minutes)
+        const auto repeatCaller = [&](int id, const char *who) {
+            call(id, who, false);
+            write(driver, QByteArray("<removed><id>") + QByteArray::number(id) + "</id></removed>");
+            return call(id + 1, who, false);
+        };
+
+        // Do Not Disturb with the defaults: both let through
+        service.setDoNotDisturb(true);
+        Posted p = call(300, "Mode starred one", true);
+        CHECK(rings(p) && exception(p) == "starred");
+        p = repeatCaller(301, "Mode repeat one");
+        CHECK(rings(p) && exception(p) == "repeat");
+        // starred off for Do Not Disturb: the starred contact is silent, repeat callers still ring
+        setMode("do-not-disturb", "starred", false);
+        p = call(303, "Mode starred two", true);
+        CHECK(!rings(p) && exception(p).isEmpty());
+        p = repeatCaller(304, "Mode repeat two");
+        CHECK(rings(p) && exception(p) == "repeat");
+        // repeat off as well: only unknown callers, all silent
+        setMode("do-not-disturb", "repeat", false);
+        p = repeatCaller(306, "Mode repeat three");
+        CHECK(!rings(p) && exception(p).isEmpty());
+        // starred on, repeat off
+        setMode("do-not-disturb", "starred", true);
+        p = call(308, "Mode starred three", true);
+        CHECK(rings(p) && exception(p) == "starred");
+        p = repeatCaller(309, "Mode repeat four");
+        CHECK(!rings(p));
+        unsetMode("do-not-disturb");
+        service.setDoNotDisturb(false);
+
+        // Bedtime has keys of its own
+        service.setModeQuiet(true);
+        service.setBedtimeMode(true);
+        p = call(311, "Mode starred four", true);
+        CHECK(rings(p) && exception(p) == "starred");
+        setMode("bedtime", "starred", false);
+        p = call(312, "Mode starred five", true);
+        CHECK(!rings(p));
+        // Do Not Disturb's keys do not matter for Bedtime
+        setMode("do-not-disturb", "starred", true);
+        CHECK(!rings(call(313, "Mode starred six", true)));
+        unsetMode("bedtime");
+        unsetMode("do-not-disturb");
+
+        // Theater: none by default, a starred contact once its key is on
+        service.setBedtimeMode(false);
+        service.setTheaterMode(true);
+        CHECK(!rings(call(314, "Mode starred seven", true)));
+        setMode("theater", "starred", true);
+        p = call(315, "Mode starred eight", true);
+        CHECK(rings(p) && exception(p) == "starred");
+        CHECK(!rings(repeatCaller(316, "Mode repeat five")));
+        setMode("theater", "repeat", true);
+        p = repeatCaller(318, "Mode repeat six");
+        CHECK(rings(p) && exception(p) == "repeat");
+        // Bedtime and Theater both on: each must allow it
+        service.setBedtimeMode(true);
+        setMode("bedtime", "starred", false);
+        CHECK(!rings(call(320, "Mode starred nine", true)));
+        unsetMode("bedtime");
+        p = call(321, "Mode starred ten", true);
+        CHECK(rings(p) && exception(p) == "starred");
+        // Do Not Disturb with Theater: Theater's switch off decides
+        service.setBedtimeMode(false);
+        service.setModeQuiet(false);
+        service.setDoNotDisturb(true);
+        setMode("theater", "starred", false);
+        CHECK(!rings(call(322, "Mode starred eleven", true)));
+        unsetMode("theater");
+        service.setTheaterMode(false);
+        service.setDoNotDisturb(false);
+    }
+
+    // ---- FP-B1 CR-20: blocked-packages drops the inserts of an app, known-apps lists the apps seen
+    {
+        CHECK(QByteArray(NotificationService::BlockedPackagesKey) == "/org/asteroidos/notifications/blocked-packages");
+        CHECK(QByteArray(NotificationService::KnownAppsKey) == "/org/asteroidos/notifications/known-apps");
+        MDConfItem blocked(NotificationService::BlockedPackagesKey), known(NotificationService::KnownAppsKey);
+        blocked.unset();
+        known.unset();
+        spin(300);
+        const auto knownList = [&]() { return MDConfItem(NotificationService::KnownAppsKey).value(QStringList()).toStringList(); };
+        const auto insert = [&](int id, const char *pn, const char *an, const char *body) {
+            write(driver, QByteArray("<insert><id>") + QByteArray::number(id) + "</id><pn>" + pn + "</pn><vb>normal</vb><an>" + an +
+                          "</an><su>Blocked test</su><bo>" + body + "</bo></insert>");
+        };
+        // count what is written to the list (dconf tells every change)
+        int knownChanges = 0;
+        MDConfItem watched(NotificationService::KnownAppsKey);
+        QObject::connect(&watched, &MDConfItem::valueChanged, [&] { knownChanges++; });
+        spin(200);
+
+        // the first insert of a package: shown, and the app listed
+        insert(330, "org.example.chat", "Example Chat", "one");
+        CHECK(next());
+        CHECK(waitFor([&] { return knownList() == QStringList("org.example.chat|Example Chat"); }));
+        CHECK(waitFor([&] { return knownChanges == 1; }));
+        // a second insert of it: nothing written
+        insert(331, "org.example.chat", "Example Chat", "two");
+        CHECK(next());
+        spin(500);
+        CHECK(knownChanges == 1 && knownList().size() == 1);
+        // renamed: the entry is replaced, not added
+        insert(332, "org.example.chat", "Example Chat 2", "three");
+        CHECK(next());
+        const uint card = newestId(fake);   // the card of phone id 332
+        CHECK(waitFor([&] { return knownList() == QStringList("org.example.chat|Example Chat 2"); }));
+        CHECK(waitFor([&] { return knownChanges == 2; }));
+        // a second app
+        insert(333, "org.example.mail", "Example Mail", "four");
+        CHECK(next());
+        CHECK(waitFor([&] { return knownList().size() == 2 && knownList().contains("org.example.mail|Example Mail"); }));
+        // a call without a package name or one that is not a package name: shown, not listed
+        insert(334, "no package name", "Strange", "five");
+        CHECK(next());
+        write(driver, "<insert><id>335</id><vb>normal</vb><an>No Package</an><su>x</su><bo>y</bo></insert>");
+        CHECK(next());
+        spin(400);
+        CHECK(knownList().size() == 2);
+
+        // blocked: not shown (no new card, no sound), its earlier card goes
+        blocked.set(QStringList("org.example.chat"));
+        CHECK(waitFor([&] { return NotificationService::isBlockedPackage("org.example.chat"); }));
+        CHECK(!NotificationService::isBlockedPackage("org.example.mail") && !NotificationService::isBlockedPackage(""));
+        const int shown = postedCount(fake);
+        insert(332, "org.example.chat", "Example Chat 2", "six");   // an update of the card of 332
+        spin(600);
+        CHECK(postedCount(fake) == shown);
+        CHECK(wasClosed(fake, card));
+        insert(336, "org.example.chat", "Example Chat 2", "six");   // a new one
+        spin(400);
+        CHECK(postedCount(fake) == shown);
+        // a blocked call is dropped as well, a notification of another app still comes
+        write(driver, "<insert><id>337</id><pn>org.example.chat</pn><vb>ringtone</vb><an>Example Chat</an><su>Caller</su><ac>answer,reject</ac></insert>");
+        spin(400);
+        CHECK(postedCount(fake) == shown);
+        insert(338, "org.example.mail", "Example Mail", "seven");
+        CHECK(next());
+        // the find-my-watch alert is not an app's
+        write(driver, "<insert><id>-78</id><pn>org.example.chat</pn><vb>ringtone</vb><an>Find my watch</an><su>x</su><ac>found</ac></insert>");
+        CHECK(next());
+        write(driver, "<removed><id>-78</id></removed>");
+        // unblocked: shown again
+        blocked.unset();
+        CHECK(waitFor([&] { return !NotificationService::isBlockedPackage("org.example.chat"); }));
+        insert(339, "org.example.chat", "Example Chat 2", "eight");
+        CHECK(next());
+
+        // at most 200 entries: a full list gives up the oldest
+        QStringList seed;
+        for(int i = 0; i < NotificationService::MaxKnownApps - 1; i++)
+            seed << QString("org.example.seed%1|Seed %1").arg(i);
+        known.set(seed);
+        CHECK(waitFor([&] { return knownList().size() == NotificationService::MaxKnownApps - 1; }));
+        CHECK(NotificationService::learnApp("org.example.last", "Last"));
+        CHECK(waitFor([&] { return knownList().size() == NotificationService::MaxKnownApps; }));
+        CHECK(NotificationService::learnApp("org.example.over", "Over"));
+        CHECK(waitFor([&] { return knownList().contains("org.example.over|Over"); }));
+        CHECK(knownList().size() == NotificationService::MaxKnownApps);
+        CHECK(!knownList().contains("org.example.seed0|Seed 0") && knownList().contains("org.example.seed1|Seed 1"));
+        CHECK(!NotificationService::learnApp("org.example.over", "Over"));   // already there: no write
+        CHECK(!NotificationService::learnApp("", "x") && !NotificationService::learnApp("a b", "x") && !NotificationService::learnApp("a|b", "x"));
+        // a name that is empty shows the package
+        CHECK(NotificationService::learnApp("org.example.bare", "  "));
+        CHECK(waitFor([&] { return knownList().contains("org.example.bare|org.example.bare"); }));
+        blocked.unset();
+        known.unset();
+        spin(300);
+    }
+
     // ---- The elements the phone does not send: nothing new in the hints
     {
         write(driver, "<insert><id>160</id><vb>none</vb><an>Chat</an><su>Plain</su><bo>x</bo></insert>");

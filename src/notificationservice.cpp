@@ -484,7 +484,7 @@ QString PostPlan::feedbackEvent(const PhoneNotification &n, bool muteRing)
 }
 
 PostPlan PostPlan::decide(const PhoneNotification &n, bool exists, bool contentChanged, bool doNotDisturb,
-                          bool onCharger, bool callAllowed)
+                          bool onCharger, bool callAllowed, const char *quietReason)
 {
     PostPlan plan;
     // A banner unless it was sent again after a reconnection, Android calls
@@ -505,7 +505,7 @@ PostPlan PostPlan::decide(const PhoneNotification &n, bool exists, bool contentC
     plan.preview = wouldAlert && !chargerSilenced;
     plan.vibrate = plan.preview && n.vibrate != QLatin1String("none");
     if(wouldAlert && chargerSilenced)
-        plan.quiet = "on the charger";
+        plan.quiet = quietReason;
 
     if(!exists) {
         plan.kind = New;
@@ -1333,13 +1333,26 @@ const char *NotificationService::callException(const PhoneNotification &n, bool 
     }
     if(!mDoNotDisturb && !mModeQuiet)
         return nullptr;
-    // Every mode that is on must let the call through: Do Not Disturb and Bedtime allow
-    // starred contacts and repeat callers, Theater none
+    // Every mode that is on must let the call through, by what its Customize page allows
+    // (modes/MODE/starred and repeat; stock's defaults: Do Not Disturb and Bedtime both,
+    // Theater none). A quiet mode that is neither Bedtime nor Theater counts as Bedtime.
+    QStringList active;
+    if(mDoNotDisturb)
+        active << QStringLiteral("do-not-disturb");
+    if(mBedtimeMode || (mModeQuiet && !mTheaterMode))
+        active << QStringLiteral("bedtime");
     if(mTheaterMode)
-        return nullptr;
-    if(verdict->starred)
+        active << QStringLiteral("theater");
+    const auto allowedBy = [&active](const char *what) {
+        for(const QString &mode : active) {
+            if(!modeAllows(mode, QLatin1String(what)))
+                return false;
+        }
+        return !active.isEmpty();
+    };
+    if(verdict->starred && allowedBy("starred"))
         return "starred";
-    if(verdict->repeat)
+    if(verdict->repeat && allowedBy("repeat"))
         return "repeat";
     return nullptr;
 }
@@ -1526,9 +1539,96 @@ bool NotificationService::onCharger() const
     return mBattery && mBattery->chargerState() == QLatin1String("on");
 }
 
+bool NotificationService::silenceSwitch()
+{
+    // The retired key counts only while the new one was never written
+    const QVariant v = MDConfItem(QString::fromLatin1(SilenceOffWristKey)).value();
+    if(v.isValid())
+        return v.toBool();
+    return MDConfItem(QString::fromLatin1(QuietOnChargerKey)).value(true).toBool();
+}
+
 bool NotificationService::quietOnCharger() const
 {
-    return onCharger() && MDConfItem(QuietOnChargerKey).value(true).toBool();
+    return onCharger() && silenceSwitch();
+}
+
+bool NotificationService::quietOffWrist() const
+{
+    // The launcher mirrors the sensor hub's off-body state (on change only); without
+    // a sensor the watch is never taken to be off the wrist
+    if(!MDConfItem(QString::fromLatin1(OffBodyAvailableKey)).value(false).toBool())
+        return false;
+    return MDConfItem(QString::fromLatin1(OffBodyKey)).value(false).toBool() && silenceSwitch();
+}
+
+bool NotificationService::modeAllows(const QString &mode, const QString &what)
+{
+    // stock's defaults (FocusModeConstants.createZenPolicyFor): Do Not Disturb and Bedtime
+    // allow starred contacts and repeat callers, Theater none
+    const bool def = mode != QLatin1String("theater");
+    return MDConfItem(QString::fromLatin1(ModeKeyBase) + mode + QLatin1Char('/') + what).value(def).toBool();
+}
+
+static bool validPackage(const QString &package)
+{
+    static const QRegularExpression packageRe("^[A-Za-z0-9._]{1,128}$");
+    return packageRe.match(package).hasMatch();
+}
+
+bool NotificationService::isBlockedPackage(const QString &package)
+{
+    if(package.isEmpty())
+        return false;
+    return MDConfItem(QString::fromLatin1(BlockedPackagesKey)).value(QStringList()).toStringList().contains(package);
+}
+
+bool NotificationService::learnApp(const QString &package, const QString &name)
+{
+    if(!validPackage(package))
+        return false;
+    // one line, and a name that is never empty (Settings shows the package for a bare one)
+    QString shown = name.simplified().left(60);
+    if(shown.isEmpty())
+        shown = package;
+    const QString entry = package + QLatin1Char('|') + shown;
+    MDConfItem item(QString::fromLatin1(KnownAppsKey));
+    QStringList list = item.value(QStringList()).toStringList();
+    const QString prefix = package + QLatin1Char('|');
+    for(int i = 0; i < list.size(); i++) {
+        if(list.at(i) == package || list.at(i).startsWith(prefix)) {
+            if(list.at(i) == entry)
+                return false;
+            list[i] = entry;
+            item.set(list);
+            return true;
+        }
+    }
+    // a full list gives up its oldest entry
+    while(list.size() >= MaxKnownApps)
+        list.removeFirst();
+    list << entry;
+    item.set(list);
+    return true;
+}
+
+uint NotificationService::closeCardOf(const PhoneNotification &n)
+{
+    uint card = mKnownAndroidNotifs.value(n.id, 0);
+    if(!card && !n.thread.isEmpty())
+        card = mThreads.value(n.thread, 0);
+    if(!card && !n.key.isEmpty())
+        card = mKeys.value(n.key, 0);
+    if(!card)
+        return 0;
+    for(auto it = mKnownAndroidNotifs.begin(); it != mKnownAndroidNotifs.end(); ) {
+        if(it.value() == card)
+            it = mKnownAndroidNotifs.erase(it);
+        else
+            ++it;
+    }
+    closeNow(card);
+    return card;
 }
 
 void NotificationService::remember(uint notificationId, const QStringList &phoneActions,
@@ -1611,27 +1711,30 @@ void NotificationService::post(const PhoneNotification &n)
     if(!n.resync)
         mDismissedAway.remove(id);
 
+    // The phone's apps for Settings > App notifications (a write only when one is new or renamed),
+    // and the apps the user switched off there: not shown, no sound, no wake, and the card
+    // an earlier insert made goes. The phone has nothing to answer for an insert, so it is
+    // simply handled. (The find-my-watch alert is the watch's own and never an app's.)
+    if(!n.phoneActions.contains("found")) {
+        if(learnApp(n.packageName, n.appName))
+            qInfo() << "Phone app" << n.packageName << "added to the known apps";
+        if(isBlockedPackage(n.packageName)) {
+            const bool hadCard = closeCardOf(n) != 0;
+            qInfo() << "Phone notification" << id << "is from" << n.packageName << "(switched off in Settings): not shown"
+                    << (hadCard ? ", its card goes" : "");
+            return;
+        }
+    }
+
     // Ongoing and non-clearable notifications (a timer, a download, a navigation) are not
     // bridged, as stock ("When notifications aren't bridged"); calls, alarms, the
     // find-my-watch alert (their own screens) and a progress bar of Android 16's ProgressStyle
     // (a live update: a ride, a delivery) still come. One that became ongoing loses its card.
     if(n.ongoing && !n.isCall() && !isCallCard(n.phoneActions) && n.vibrate != QLatin1String("alarm")
             && n.category != QLatin1String("alarm") && !n.phoneActions.contains("found") && !n.progress.present) {
-        uint card = mKnownAndroidNotifs.value(id, 0);
-        if(!card && !n.thread.isEmpty())
-            card = mThreads.value(n.thread, 0);
-        if(!card && !n.key.isEmpty())
-            card = mKeys.value(n.key, 0);
-        if(card) {
+        if(closeCardOf(n))
             qInfo() << "Phone notification" << id << "is ongoing: not shown, its card goes";
-            for(auto it = mKnownAndroidNotifs.begin(); it != mKnownAndroidNotifs.end(); ) {
-                if(it.value() == card)
-                    it = mKnownAndroidNotifs.erase(it);
-                else
-                    ++it;
-            }
-            closeNow(card);
-        } else
+        else
             qInfo() << "Phone notification" << id << "is ongoing: not shown";
         return;
     }
@@ -1676,8 +1779,10 @@ void NotificationService::post(const PhoneNotification &n)
     const bool contentChanged = !replacesId || mContent.value(replacesId) != content;
     // A call that Do Not Disturb or Bedtime lets through: a starred contact, a repeat caller
     const char *callPass = n.isCall() ? callException(n, replacesId == 0) : nullptr;
-    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb || mModeQuiet, quietOnCharger(),
-                                     callPass != nullptr);
+    const bool onCharger = quietOnCharger();
+    const bool offWrist = !onCharger && quietOffWrist();
+    PostPlan plan = PostPlan::decide(n, replacesId != 0, contentChanged, mDoNotDisturb || mModeQuiet, onCharger || offWrist,
+                                     callPass != nullptr, onCharger ? "on the charger" : "off the wrist");
     // The update that brings the watch's own reply: in place, quietly
     if(replacesId && mRepliedAt.contains(replacesId)) {
         const qint64 repliedAt = mRepliedAt.take(replacesId);

@@ -27,6 +27,7 @@
 #include "bluezmanager.h"
 #include "contactnames.h"
 #include "callaudio.h"
+#include "connectivityfeedback.h"
 
 int main(int argc, char **argv)
 {
@@ -65,6 +66,11 @@ int main(int argc, char **argv)
     app.setCallControl(&calls);
     QObject::connect(&bm, &BlueZManager::connectedChanged, &calls, [&calls, &bm] { calls.setPhoneLink(bm.connected()); });
     calls.setPhoneLink(bm.connected());
+    // Settings > Developer options > "Vibrate on connectivity change": a buzz when the phone
+    // connects or disconnects (off by default)
+    ConnectivityFeedback connectivity;
+    QObject::connect(&bm, &BlueZManager::connectedChanged, &connectivity, [&connectivity, &bm] { connectivity.setPhoneLink(bm.connected()); });
+    connectivity.setPhoneLink(bm.connected());
     // the phone's contact names go with its bond (unpaired on the watch, or reset)
     QObject::connect(&bm, &BlueZManager::noDevicePaired, &app, [] { ContactNames::remove("no phone is paired"); });
 
