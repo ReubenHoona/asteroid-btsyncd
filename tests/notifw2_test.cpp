@@ -388,6 +388,14 @@ int main(int argc, char **argv)
     CHECK(apiCall(driver, "ActionAcks").toBool() == true);
     const QList<QByteArray> acks = loadFrames("action-ack");
     CHECK(acks.size() == 6);
+    // lipstick's ActionInvoked and the phone's answer come over two connections, in no fixed
+    // order: the action must have reached btsyncd (its feedback went out) before the answer is
+    // written, or under load (ctest -j) the answer finds nobody waiting and the action times out
+    const auto invoke = [&](uint id, const QString &key) {
+        collector.feedback.clear();
+        emitActionInvoked(fakeConn, id, key);
+        CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
+    };
     collector.results.clear();
     reply(L1, "again");
     spin(150);
@@ -399,8 +407,7 @@ int main(int argc, char **argv)
     write(driver, acks.value(1));                       // reply failed
     CHECK(waitFor([&] { return collector.results == QStringList(result(L1, "reply", -1, "failed")); }));
     collector.results.clear();
-    emitActionInvoked(fakeConn, L1, "app-2");
-    spin(100);
+    invoke(L1, "app-2");
     CHECK(collector.results.isEmpty());
     // the answer for another index is not this action's
     write(driver, "<ack><id>1793200001</id><ty>app</ty><ix>1</ix><ok>1</ok></ack>");
@@ -409,15 +416,15 @@ int main(int argc, char **argv)
     write(driver, acks.value(2));                       // app 2 ok
     CHECK(waitFor([&] { return collector.results == QStringList(result(L1, "app", 2, "ok")); }));
     collector.results.clear();
-    emitActionInvoked(fakeConn, L1, "app-0");
+    invoke(L1, "app-0");
     write(driver, acks.value(3));                       // app 0 failed
     CHECK(waitFor([&] { return collector.results == QStringList(result(L1, "app", 0, "failed")); }));
     collector.results.clear();
-    emitActionInvoked(fakeConn, L2, "open");
+    invoke(L2, "open");
     write(driver, acks.value(4));                       // the other notification's open (id -5) ok
     CHECK(waitFor([&] { return collector.results == QStringList(result(L2, "open", -1, "ok")); }));
     collector.results.clear();
-    emitActionInvoked(fakeConn, L1, "open");
+    invoke(L1, "open");
     write(driver, acks.value(5));                       // open failed
     CHECK(waitFor([&] { return collector.results == QStringList(result(L1, "open", -1, "failed")); }));
     // an answer split in two writes

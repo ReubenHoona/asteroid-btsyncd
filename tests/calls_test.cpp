@@ -630,6 +630,9 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return logged("volume SpeakerVolume 40"); }));
         volumeObserver.set(80);
         CHECK(waitFor([&] { return getState(driver).value("volume").toInt() == 4; }));
+        // the fake oFono (its own thread) may log the SetProperty after the state changed: wait
+        // for it before the log is cleared, or it shows up in the AT+VGS check below
+        CHECK(waitFor([&] { return logged("volume SpeakerVolume 80"); }));
         takeCalls();
     }
 
