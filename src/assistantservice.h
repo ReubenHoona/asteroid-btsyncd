@@ -34,6 +34,7 @@
 #include "phonerelay.h"
 #include "service.h"
 
+class AssistantReplyChrc;
 class AssistantService;
 class MDConfItem;
 class NotificationService;
@@ -168,6 +169,7 @@ private:
 
     NotificationService *mNotifications;
     AssistantRequestsChrc *mRequests;
+    AssistantReplyChrc *mReply;
     AssistantDBusApi *mApi;
     bool mPhoneReady = false;
     QStringList mPhoneActions;

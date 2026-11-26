@@ -14,7 +14,7 @@
  *     one without its end is dropped and the next reply still parses
  *   - btsyncd's own acts (PhoneRelay::relayAct): their own ids, never on the session bus
  *   - reconnections: what waits ends "disconnected", the actions and the MTU are the next
- *     connection's
+ *     connection's, and a reply cut by the disconnection does not swallow the phone's status
  * Names, numbers and addresses are the invented ones of the fixtures (555 numbers).
  */
 #include "assistantprotocol.h"
@@ -475,6 +475,36 @@ private slots:
         mRequests->StartNotify();
         status();
         QVERIFY(mRelay->actions().contains(QStringLiteral("cvol")));
+    }
+
+    // A result cut by the disconnection (the phone walked away while it wrote a long contact
+    // list): the phone writes its status first at the next connection, and the relay must take it
+    void replyCutByADisconnection()
+    {
+        const QByteArray result = fixtureFrames("contacts-results.frames.txt").value(0);
+        QVERIFY(result.size() > 300);
+        QVERIFY(mRelay->act(41, mRequestJson.value(41).toUtf8()));
+        reply(result.left(244));                    // one write of several
+        mNotifications->setLinkConnected(false);
+        QCOMPARE(resultsFor(41).value(0).json, QStringLiteral("{\"ok\":false,\"er\":\"disconnected\"}"));
+        mNotifications->setLinkConnected(true);
+        status();
+        QVERIFY2(mRelay->actions().contains(QStringLiteral("clist")),
+                 "the status of the new connection was taken for the rest of the cut reply");
+        QVERIFY(mRelay->available());
+        // and the relay works: the list again, whole
+        QVERIFY(mRelay->act(41, mRequestJson.value(41).toUtf8()));
+        reply(result);
+        QCOMPARE(resultsFor(41).size(), 2);
+        QCOMPARE(resultsFor(41).value(1).json, parseFrame(result).json);
+
+        // the same when the phone unsubscribes in the middle (Gadgetbridge restarted)
+        QVERIFY(mRelay->act(41, mRequestJson.value(41).toUtf8()));
+        reply(result.left(100));
+        mRequests->StopNotify();
+        mRequests->StartNotify();
+        status();
+        QVERIFY(mRelay->actions().contains(QStringLiteral("clist")));
     }
 };
 

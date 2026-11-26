@@ -19,6 +19,7 @@
 #include "assistantprotocol.h"
 #include "common.h"
 #include "contactnames.h"
+#include "messagejoiner.h"
 #include "notificationservice.h"
 #include "wakehold.h"
 
@@ -53,42 +54,28 @@ class AssistantReplyChrc : public Characteristic
 {
 public:
     AssistantReplyChrc(QDBusConnection bus, unsigned int index, AssistantService *service)
-      : Characteristic(bus, index, ASSISTANT_REPLY_UUID, {"encrypt-authenticated-write"}, service, service), mService(service) {}
+      : Characteristic(bus, index, ASSISTANT_REPLY_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
+        // an answer or status ends with </asr>, an action's result with </acr>, a part of the
+        // contact names with </cn>, a phone event with </pe>; a new one at offset 0 while one
+        // is incomplete means the rest of that one was lost
+        mJoiner("Assistant reply", {"asr", "acr", "cn", "pe"}, MaxReplySize) {}
+
+    // The phone is gone: a reply cut by the disconnection never ends, and the phone writes its
+    // status first at the next connection (it was taken for the rest of the cut reply)
+    void drop(const char *why) { mJoiner.drop(why); }
 
 public slots:
     void WriteValue(QByteArray value, QVariantMap options) override
     {
         // the watch may be asleep when the answer comes: hold while it is handled
         WakeHoldScope wake;
-        mBuffer += value;
-        for (;;) {
-            // an answer or status ends with </asr>, an action's result with
-            // </acr>, a part of the contact names with </cn>, a phone event
-            // with </pe>
-            int end = -1, tag = 0;
-            for (const char *t : {"</asr>", "</acr>", "</cn>", "</pe>"}) {
-                const int at = mBuffer.indexOf(t);
-                if (at >= 0 && (end < 0 || at < end)) {
-                    end = at;
-                    tag = int(qstrlen(t));
-                }
-            }
-            if (end < 0) {
-                if (mBuffer.size() > MaxReplySize) {
-                    qWarning() << "Assistant reply without an end, dropped";
-                    mBuffer.clear();
-                }
-                return;
-            }
-            const QByteArray xml = mBuffer.left(end + tag);
-            mBuffer = mBuffer.mid(end + tag);
-            mService->onReply(xml, optionMtu(options));
-        }
+        for (const auto &message : mJoiner.add(value, MessageJoiner::offsetOf(options)))
+            mService->onReply(message.second, optionMtu(options));
     }
 
 private:
     AssistantService *mService;
-    QByteArray mBuffer;
+    MessageJoiner mJoiner;
 };
 
 class AssistantCapabilitiesChrc : public Characteristic
@@ -176,7 +163,8 @@ AssistantService::AssistantService(int index, QDBusConnection bus, NotificationS
 {
     mRequests = new AssistantRequestsChrc(bus, 0, this);
     addCharacteristic(mRequests);
-    addCharacteristic(new AssistantReplyChrc(bus, 1, this));
+    mReply = new AssistantReplyChrc(bus, 1, this);
+    addCharacteristic(mReply);
     addCharacteristic(new AssistantCapabilitiesChrc(bus, 2, this));
 
     mTimeout.setSingleShot(true);
@@ -415,8 +403,9 @@ void AssistantService::phoneGone(const char *why)
     const bool wasReady = mPhoneReady;
     mPhoneReady = false;
     mPhoneActions.clear();
-    // a list half sent comes again in full at the next connection
+    // a list half sent comes again in full at the next connection; so does a reply cut short
     mNames.reset();
+    mReply->drop("the phone is gone");
     mMtu = 0;
     mTimeout.stop();
     const QSet<uint> waiting = mWaiting;
