@@ -109,7 +109,7 @@ foreach(t voicelocal_test voicelink_test)
 endforeach()
 
 # The calls on the watch with a fake oFono and BlueZ (BTSYNCD_CALLS_TIME_DIV: its waits 100 times shorter)
-btsyncd_test(calls_test DCONF SOURCES ${SRC}/callaudio.cpp common/odrdefs.cpp LIBS Qt6::DBus ${MLITE} ENV BTSYNCD_CALLS_TIME_DIV=100)
+btsyncd_test(calls_test DCONF SOURCES ${SRC}/callaudio.cpp LIBS Qt6::DBus ${MLITE} ENV BTSYNCD_CALLS_TIME_DIV=100)
 
 # The notification service (protocol versions 3 and 4) with a fake lipstick; pictures; messaging polish
 foreach(t notifications_test pictures_test msgpictures_test)

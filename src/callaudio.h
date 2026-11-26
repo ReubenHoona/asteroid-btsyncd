@@ -74,7 +74,7 @@ class CallAudio : public QObject, public CallControl
 public:
     // The steps of the call volume (stock: STREAM_VOICE_CALL 1..5) and the
     // percent kept in dconf for each (the Settings > Sound slider's)
-    static const int VolumeMax = 5;
+    static constexpr int VolumeMax = 5;
     // Hands-free connect attempts after the phone's LE link came, without
     // one in between that worked: 5 s, then 30 s doubling (no endless polling)
     static const int ConnectAttempts = 6;
