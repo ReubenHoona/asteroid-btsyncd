@@ -656,6 +656,38 @@ private slots:
         mUpdate->WriteValue("oved>", {});
         QTRY_COMPARE(mLip->closeCalls(), QList<uint>{4000});
     }
+
+    // BlueZ keeps a bonded phone's subscription when it goes out of range (8362e14): the link
+    // decides. What the user dismisses meanwhile waits (the newest 64) and goes out once the
+    // phone is back and set up (PhoneSetupMs); the phone's resync does not bring those back
+    void dismissalsWaitForTheLink()
+    {
+        for (int i = 0; i < 70; i++)
+            write(mUpdate, insert(1000 + i, "<su>S" + QByteArray::number(i) + "</su>"));
+        mService->setLinkConnected(false);
+        QVERIFY(!mService->phoneConnected());
+        for (int i = 0; i < 70; i++)
+            mLip->emitClosed(lipstickId(1000 + i), 2);
+        QTRY_COMPARE(lipstickId(1069), 0u);
+        QTest::qWait(100);
+        QVERIFY(mChunks.isEmpty());
+        // the link is back, the phone resyncs before it heard of the dismissals
+        mService->setLinkConnected(true);
+        QVERIFY(mService->phoneConnected());
+        const int before = mLip->notifyCalls().size();
+        write(mUpdate, insert(1069, "<su>S69</su><rs>1</rs>"));
+        write(mUpdate, insert(1003, "<su>S3</su><rs>1</rs>"));
+        QCOMPARE(mLip->notifyCalls().size(), before);
+        QTest::qWait(500);
+        QVERIFY(mChunks.isEmpty());       // not before the phone is set up
+        QTRY_VERIFY_WITH_TIMEOUT(feedback().count("</action>") == 64, NotificationService::PhoneSetupMs + 3000);
+        // the newest 64, in the order they were made
+        QVERIFY(feedback().startsWith("<action><id>1006</id><ty>dismiss</ty></action><action><id>1007</id>"));
+        QVERIFY(feedback().endsWith("<action><id>1069</id><ty>dismiss</ty></action>"));
+        QVERIFY(!feedback().contains("<id>1005</id>"));
+        QTest::qWait(200);
+        QCOMPARE(feedback().count("</action>"), 64);
+    }
 };
 
 BTSYNCD_TEST_MAIN(TestNotificationService)

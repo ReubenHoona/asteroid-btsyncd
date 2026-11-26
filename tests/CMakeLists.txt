@@ -192,5 +192,9 @@ btsyncd_test(tst_voiceservice QTEST BUS SOURCES ${SRC}/voiceservice.cpp ${SRC}/v
 # timeouts in real time (about 21 s), size limits, reconnections
 btsyncd_test(tst_relay QTEST BUS SOURCES ${SRC}/assistantservice.cpp ${SRC}/assistantprotocol.cpp ${SRC}/contactnames.cpp
 	${NOTIF} ${FAKES} LIBS Qt6::DBus)
+# The phone's call cards: buttons, CallControl and CallObserver, the missed-call frame, reconnections
+btsyncd_test(tst_calls QTEST BUS SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
+# The phone's <insert> element by element (versions 4, 5, CR-52) and Gadgetbridge's inserts; no bus
+btsyncd_test(tst_notifparse QTEST SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
 btsyncd_test(tst_bluezmanager QTEST BUS SOURCES ${SRC}/bluezmanager.cpp ${SRC}/advertisement.cpp ${SRC}/ancs.cpp
 	${SRC}/ancs_notification.cpp ${SRC}/cts.cpp ${SRC}/settime.cpp ${FAKES} LIBS Qt6::DBus)
