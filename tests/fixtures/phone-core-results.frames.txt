@@ -1,0 +1,9 @@
+<acr><id>21</id><js>{&quot;ok&quot;:true}</js></acr>
+<acr><id>21</id><js>{&quot;ok&quot;:true,&quot;dry&quot;:true}</js></acr>
+<acr><id>21</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;no-permission&quot;,&quot;perm&quot;:&quot;phone&quot;}</js></acr>
+<acr><id>21</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;bad-request&quot;}</js></acr>
+<acr><id>24</id><js>{&quot;ok&quot;:true,&quot;c&quot;:[{&quot;k&quot;:&quot;p1&quot;,&quot;n&quot;:&quot;Alice Example&quot;,&quot;s&quot;:1,&quot;p&quot;:0},{&quot;k&quot;:&quot;p2&quot;,&quot;n&quot;:&quot;Bob Sample&quot;,&quot;s&quot;:0,&quot;p&quot;:0},{&quot;k&quot;:&quot;p3&quot;,&quot;n&quot;:&quot;charlie test&quot;,&quot;s&quot;:0,&quot;p&quot;:0}],&quot;more&quot;:false,&quot;h&quot;:&quot;65858c0159e7c5db&quot;}</js></acr>
+<acr><id>24</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;no-permission&quot;,&quot;perm&quot;:&quot;contacts&quot;}</js></acr>
+<acr><id>25</id><js>{&quot;ok&quot;:true,&quot;n&quot;:&quot;Bob Sample&quot;,&quot;m&quot;:[{&quot;k&quot;:&quot;c2&quot;,&quot;t&quot;:&quot;Mobile&quot;,&quot;nm&quot;:&quot;+15550102&quot;,&quot;d&quot;:1},{&quot;k&quot;:&quot;c3&quot;,&quot;t&quot;:&quot;Work&quot;,&quot;nm&quot;:&quot;+1 555 0103&quot;,&quot;d&quot;:0}]}</js></acr>
+<acr><id>26</id><js>{&quot;ok&quot;:true,&quot;v&quot;:3,&quot;max&quot;:5}</js></acr>
+<acr><id>28</id><js>{&quot;ok&quot;:true}</js></acr>

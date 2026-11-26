@@ -188,5 +188,9 @@ btsyncd_test(tst_healthservice QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}
 btsyncd_test(tst_notificationservice QTEST BUS SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
 btsyncd_test(tst_voiceservice QTEST BUS SOURCES ${SRC}/voiceservice.cpp ${SRC}/voicesource.cpp ${SRC}/voiceprotocol.cpp
 	${SRC}/voicecond.cpp ${NOTIF} ${FAKES} LIBS Qt6::DBus)
+# The assistant relay's acts with Gadgetbridge's frames (fixtures/): forwarding, results, CR-50
+# timeouts in real time (about 21 s), size limits, reconnections
+btsyncd_test(tst_relay QTEST BUS SOURCES ${SRC}/assistantservice.cpp ${SRC}/assistantprotocol.cpp ${SRC}/contactnames.cpp
+	${NOTIF} ${FAKES} LIBS Qt6::DBus)
 btsyncd_test(tst_bluezmanager QTEST BUS SOURCES ${SRC}/bluezmanager.cpp ${SRC}/advertisement.cpp ${SRC}/ancs.cpp
 	${SRC}/ancs_notification.cpp ${SRC}/cts.cpp ${SRC}/settime.cpp ${FAKES} LIBS Qt6::DBus)

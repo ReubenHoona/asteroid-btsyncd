@@ -1,0 +1,8 @@
+<act><id>21</id><js>{&quot;a&quot;:&quot;dial&quot;,&quot;nm&quot;:&quot;+6495550100&quot;,&quot;dry&quot;:false}</js></act>
+<act><id>22</id><js>{&quot;a&quot;:&quot;call&quot;,&quot;k&quot;:&quot;c7&quot;,&quot;dry&quot;:false}</js></act>
+<act><id>23</id><js>{&quot;a&quot;:&quot;sms&quot;,&quot;nm&quot;:&quot;+6495550100&quot;,&quot;tx&quot;:&quot;On my way&quot;,&quot;dry&quot;:false}</js></act>
+<act><id>24</id><js>{&quot;a&quot;:&quot;clist&quot;,&quot;fav&quot;:0,&quot;q&quot;:&quot;sam&quot;,&quot;off&quot;:0,&quot;n&quot;:40}</js></act>
+<act><id>25</id><js>{&quot;a&quot;:&quot;cnums&quot;,&quot;k&quot;:&quot;p2&quot;}</js></act>
+<act><id>26</id><js>{&quot;a&quot;:&quot;cvol&quot;}</js></act>
+<act><id>27</id><js>{&quot;a&quot;:&quot;cvol&quot;,&quot;d&quot;:-1}</js></act>
+<act><id>28</id><js>{&quot;a&quot;:&quot;wxrefresh&quot;}</js></act>

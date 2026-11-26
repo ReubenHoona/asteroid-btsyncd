@@ -1,0 +1,7 @@
+<act><id>41</id><js>{&quot;a&quot;:&quot;clist&quot;,&quot;off&quot;:0,&quot;n&quot;:100,&quot;h&quot;:&quot;&quot;}</js></act>
+<act><id>42</id><js>{&quot;a&quot;:&quot;cinfo&quot;,&quot;k&quot;:&quot;p1&quot;}</js></act>
+<act><id>43</id><js>{&quot;a&quot;:&quot;cstar&quot;,&quot;k&quot;:&quot;p2&quot;,&quot;s&quot;:1}</js></act>
+<act><id>44</id><js>{&quot;a&quot;:&quot;cdel&quot;,&quot;k&quot;:&quot;p3&quot;}</js></act>
+<act><id>45</id><js>{&quot;a&quot;:&quot;cphoto&quot;,&quot;k&quot;:&quot;p1&quot;,&quot;px&quot;:116}</js></act>
+<act><id>46</id><js>{&quot;a&quot;:&quot;open&quot;,&quot;w&quot;:&quot;contact&quot;,&quot;k&quot;:&quot;p1&quot;,&quot;n&quot;:&quot;Ana Example&quot;}</js></act>
+<act><id>47</id><js>{&quot;a&quot;:&quot;open&quot;,&quot;w&quot;:&quot;mail&quot;,&quot;to&quot;:&quot;ana@example.org&quot;}</js></act>

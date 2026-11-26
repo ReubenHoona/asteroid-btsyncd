@@ -1,0 +1,8 @@
+<acr><id>41</id><js>{&quot;ok&quot;:true,&quot;c&quot;:[{&quot;k&quot;:&quot;p1&quot;,&quot;n&quot;:&quot;Ana Example&quot;,&quot;s&quot;:1,&quot;p&quot;:1},{&quot;k&quot;:&quot;p2&quot;,&quot;n&quot;:&quot;Ben Sample&quot;,&quot;s&quot;:0,&quot;p&quot;:0},{&quot;k&quot;:&quot;p3&quot;,&quot;n&quot;:&quot;Cleo Test&quot;,&quot;s&quot;:0,&quot;p&quot;:0}],&quot;more&quot;:false,&quot;h&quot;:&quot;c526f0b7e48007ad&quot;}</js></acr>
+<acr><id>41</id><js>{&quot;ok&quot;:true,&quot;same&quot;:true,&quot;h&quot;:&quot;c526f0b7e48007ad&quot;}</js></acr>
+<acr><id>42</id><js>{&quot;ok&quot;:true,&quot;n&quot;:&quot;Ana Example&quot;,&quot;s&quot;:1,&quot;p&quot;:1,&quot;nick&quot;:&quot;Annie&quot;,&quot;ph&quot;:&quot;AH-nah eg-ZAM-pul&quot;,&quot;org&quot;:&quot;Example Co&quot;,&quot;note&quot;:&quot;Met at the fair.\\nLikes tea.&quot;,&quot;e&quot;:[{&quot;t&quot;:&quot;Home&quot;,&quot;v&quot;:&quot;ana@example.org&quot;},{&quot;t&quot;:&quot;Club&quot;,&quot;v&quot;:&quot;ana.club@example.net&quot;}],&quot;a&quot;:[{&quot;t&quot;:&quot;Work&quot;,&quot;v&quot;:&quot;1 Example Street, Exampletown&quot;}],&quot;dl&quot;:1}</js></acr>
+<acr><id>43</id><js>{&quot;ok&quot;:true}</js></acr>
+<acr><id>44</id><js>{&quot;ok&quot;:true}</js></acr>
+<acr><id>45</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;no-photo&quot;}</js></acr>
+<acr><id>46</id><js>{&quot;ok&quot;:true,&quot;how&quot;:&quot;notification&quot;}</js></acr>
+<acr><id>41</id><js>{&quot;ok&quot;:false,&quot;er&quot;:&quot;no-permission&quot;,&quot;perm&quot;:&quot;contacts&quot;}</js></acr>
