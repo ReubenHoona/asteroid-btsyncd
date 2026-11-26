@@ -52,6 +52,7 @@ public:
     // The complete messages after this write: (root element name, bytes)
     QList<QPair<QByteArray, QByteArray>> add(const QByteArray &value, int offset)
     {
+        mOverflowed = false;
         if(!mBuffer.isEmpty() && offset == 0 && startsMessage(value))
             drop("a new message began");
         mBuffer += value;
@@ -94,10 +95,14 @@ public:
             messages << qMakePair(name, mBuffer.left(end));
             mBuffer.remove(0, end);
         }
-        if(mBuffer.size() > mMax)
+        if(mBuffer.size() > mMax) {
             drop("too long without an end");
+            mOverflowed = true;
+        }
         return messages;
     }
+    // The last add() dropped a message that grew past maxBytes without its end
+    bool overflowed() const { return mOverflowed; }
 
     // Nothing of a message is waiting for its end
     bool idle() const { return mBuffer.isEmpty(); }
@@ -126,6 +131,7 @@ private:
     QList<QByteArray> mRoots;
     int mMax;
     QByteArray mBuffer;
+    bool mOverflowed = false;
 };
 
 #endif // MESSAGEJOINER_H

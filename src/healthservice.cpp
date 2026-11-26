@@ -19,6 +19,7 @@
 #include "healthrecords.h"
 #include "characteristic.h"
 #include "common.h"
+#include "messagejoiner.h"
 
 #include <MDConfItem>
 #include <QDBusMessage>
@@ -66,31 +67,33 @@ static int minAccuracy()
 
 /*
  * Phone to watch: <req><ty>TYPE</ty><si>SINCE</si><mx>MAX</mx></req>, in as
- * many writes as needed. A new request replaces an unanswered one.
+ * many writes as needed. A new request replaces an unanswered one; a request
+ * that begins (at offset 0) while one is incomplete means the rest of that one
+ * was lost, as does the phone going (drop()).
  */
 class HealthRequestChrc : public Characteristic
 {
 public:
     HealthRequestChrc(QDBusConnection bus, unsigned int index, HealthService *service)
-      : Characteristic(bus, index, HEALTH_REQ_UUID, {"encrypt-authenticated-write"}, service, service), mService(service) {}
+      : Characteristic(bus, index, HEALTH_REQ_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
+        mJoiner("Health request", {"req"}, MaxRequestSize) {}
+
+    void drop(const char *why) { mJoiner.drop(why); }
 
 public slots:
     void WriteValue(QByteArray value, QVariantMap options)
     {
         const int mtu = options.contains("mtu") ? options.value("mtu").toInt() : 0;
-        mBuffer += value;
-        const int end = mBuffer.indexOf("</req>");
-        if (end < 0) {
-            if (mBuffer.size() > MaxRequestSize) {
-                qWarning() << "Health request without an end, dropped";
-                mBuffer.clear();
-                mService->request(QString(), 0, 0, mtu);
-            }
-            return;
-        }
-        const QByteArray xml = mBuffer.left(end + 6);
-        mBuffer.clear();
+        const auto messages = mJoiner.add(value, MessageJoiner::offsetOf(options));
+        if (mJoiner.overflowed())
+            mService->request(QString(), 0, 0, mtu);
+        for (const auto &message : messages)
+            handle(message.second, mtu);
+    }
 
+private:
+    void handle(const QByteArray &xml, int mtu)
+    {
         QXmlStreamReader reader(xml);
         QString type;
         qint64 since = 0;
@@ -114,9 +117,8 @@ public slots:
         mService->request(type.isEmpty() ? QStringLiteral("?") : type, since, max, mtu);
     }
 
-private:
     HealthService *mService;
-    QByteArray mBuffer;
+    MessageJoiner mJoiner;
 };
 
 /*
@@ -175,9 +177,17 @@ void HealthDataChrc::emitPropertiesChanged()
 HealthService::HealthService(int index, QDBusConnection bus, QObject *parent) : Service(bus, index, HEALTH_UUID, parent)
 {
     mData = new HealthDataChrc(bus, 1, this);
-    addCharacteristic(new HealthRequestChrc(bus, 0, this));
+    mRequest = new HealthRequestChrc(bus, 0, this);
+    addCharacteristic(mRequest);
     addCharacteristic(mData);
     addCharacteristic(new HealthCapabilitiesChrc(bus, 2, this));
+}
+
+void HealthService::phoneConnectedChanged(bool connected)
+{
+    // a request cut by the disconnection never ends: the phone asks again when it is back
+    if (!connected)
+        mRequest->drop("the phone is gone");
 }
 
 void HealthService::request(const QString &type, qint64 since, int max, int mtu)

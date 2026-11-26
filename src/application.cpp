@@ -53,7 +53,9 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     screenshots->content()->setPhoneCheck([notifications] { return notifications->phoneConnected(); });
     addService(screenshots);
     addService(new TimeService(5, bus));
-    addService(new HealthService(6, bus));
+    HealthService *health = new HealthService(6, bus);
+    addService(health);
+    connect(notifications, &NotificationService::phoneConnectedChanged, health, &HealthService::phoneConnectedChanged);
     addService(new VoiceService(7, bus, notifications));
 #ifdef BTSYNCD_HAVE_CALENDAR
     // The phone's calendar into mkcal

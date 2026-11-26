@@ -207,6 +207,34 @@ private slots:
         QVERIFY(answer().startsWith("<data><ty>hr</ty><t0>"));
     }
 
+    // A request cut by the disconnection: the next connection's first request is answered (before
+    // the fix it was taken for the rest of the cut one, and the phone got an error)
+    void requestCutByADisconnection()
+    {
+        write("<req><ty>hr</ty><si>17", 23);
+        QTest::qWait(10);
+        QVERIFY(mChunks.isEmpty());
+        // the link goes and comes back (NotificationService::phoneConnectedChanged in application.cpp;
+        // by name, as 70c7fb3 has no such slot)
+        QMetaObject::invokeMethod(mService, "phoneConnectedChanged", Q_ARG(bool, false));
+        QMetaObject::invokeMethod(mService, "phoneConnectedChanged", Q_ARG(bool, true));
+        write("<req><ty>hr</ty><si>0</si><mx>1000</mx></req>");
+        QByteArray xml = answer();
+        QVERIFY2(xml.startsWith("<data><ty>hr</ty><t0>"), xml);
+        // the same without the link information: a request that begins drops the one left incomplete
+        mChunks.clear();
+        write("<req><ty>steps</ty><si>5", 23);
+        write("<req><ty>steps</ty><si>0</si></req>");
+        xml = answer();
+        QVERIFY2(xml.startsWith("<data><ty>steps</ty><t0>"), xml);
+        // but the pieces of one request (not at its start) are still joined
+        mChunks.clear();
+        write("<req><ty>h", 23);
+        write("r</ty><si>0</si></req>", 23);
+        xml = answer();
+        QVERIFY2(xml.startsWith("<data><ty>hr</ty><t0>"), xml);
+    }
+
     void newerRequestReplacesAnUnansweredOne()
     {
         write("<req><ty>steps</ty><si>0</si></req>");

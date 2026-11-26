@@ -58,6 +58,8 @@ private:
  *   <req><ty>hr|steps|hrr</ty><si>SINCE</si><mx>MAX</mx></req>
  * and gets the records after SINCE on the data characteristic.
  */
+class HealthRequestChrc;
+
 class HealthService : public Service
 {
     Q_OBJECT
@@ -68,11 +70,16 @@ public:
     // acknowledged before the data
     void request(const QString &type, qint64 since, int max, int mtu);
 
+public slots:
+    // The phone's link (NotificationService::phoneConnectedChanged)
+    void phoneConnectedChanged(bool connected);
+
 private slots:
     void sendPending();
 
 private:
     HealthDataChrc *mData;
+    HealthRequestChrc *mRequest;
     QByteArray mPending;
     int mPendingMtu = 23;
 };
