@@ -10,7 +10,8 @@
  *   - the canned replies (<replies>) and the capabilities read
  *   - finding the phone's notifications again after a restart (restoreKnown)
  *   - the wake hold around a write
- * Phone ids, texts and numbers are synthetic.
+ * Updated to the image's protocol (eos-osimage): see each case for the commit that changed what
+ * it checks. Phone ids, texts and numbers are synthetic.
  */
 #include "notificationservice.h"
 #include "backgroundactivity.h"
@@ -95,7 +96,9 @@ private slots:
         QVERIFY(mPeers->startLipstick());
         mService = new NotificationService(0, QDBusConnection::systemBus(), this);
         const QList<Characteristic *> chrcs = mService->getCharacteristics();
-        QCOMPARE(chrcs.size(), 4);
+        // update, feedback, replies, capabilities, and since protocol 4 (b80e634) the app icons and
+        // (5482b15) the notification pictures
+        QCOMPARE(chrcs.size(), 6);
         mUpdate = chrcs[0];
         mFeedback = qobject_cast<NotificationsFeedbackChrc *>(chrcs[1]);
         mReplies = chrcs[2];
@@ -105,13 +108,19 @@ private slots:
         QCOMPARE(mFeedback->getUuid(), QStringLiteral(NOTI_FDB_UUID));
         QCOMPARE(mReplies->getUuid(), QStringLiteral(NOTI_RPL_UUID));
         QCOMPARE(mCaps->getUuid(), QStringLiteral(NOTI_CAP_UUID));
-        QCOMPARE(mService->getCharacteristicPaths().size(), 4);
+        QCOMPARE(chrcs[4]->getUuid(), QStringLiteral(NOTI_ICON_UUID));
+        QCOMPARE(chrcs[5]->getUuid(), QStringLiteral(NOTI_PIC_UUID));
+        QCOMPARE(mService->getCharacteristicPaths().size(), 6);
         QCOMPARE(mUpdate->getService(), mService->getPath());
         connect(mFeedback, &NotificationsFeedbackChrc::valueChanged, this, [this] {
             mChunks << mFeedback->property("Value").toByteArray();
         });
         // The first restoreKnown() ran in the constructor
         QCOMPARE(mLip->getNotificationsCalls(), 1);
+        // A subscribed phone: since b80e634 a dismiss waits for one (and is sent when it is back)
+        mService->setCallGraceMs(3600 * 1000);
+        mFeedback->StartNotify();
+        QVERIFY(mService->phoneConnected());
     }
 
     void init()
@@ -132,10 +141,21 @@ private slots:
 
     void capabilities()
     {
-        const QByteArray caps = "<capabilities><version>2</version>"
-                                "<actions>dismiss,reply,open,mute,answer,reject,silence,end</actions>"
-                                "<replies>1</replies></capabilities>";
-        QCOMPARE(mCaps->ReadValue({}), caps);
+        // Version 4 (b80e634) with found (find my watch), the elements of versions 3 and 4 and the
+        // W2 additions (db29902: ack, subtext, progress)
+        const QByteArray caps = mCaps->ReadValue({});
+        QCOMPARE(caps, NotificationService::capabilities());
+        QVERIFY(caps.startsWith("<capabilities><version>4</version>"
+                                "<actions>dismiss,reply,open,mute,answer,reject,silence,end,found</actions>"
+                                "<replies>1</replies><smartreplies>5</smartreplies><appactions>10</appactions>"
+                                "<findphone>1</findphone><threads>1</threads><messages>6</messages>"));
+        QVERIFY(caps.endsWith("<me>1</me><msgpictures>1</msgpictures><ack>1</ack><subtext>1</subtext>"
+                              "<progress>1</progress></capabilities>"));
+        QXmlStreamReader r(caps);
+        QVERIFY(r.readNextStartElement());
+        while (r.readNextStartElement())
+            r.skipCurrentElement();
+        QVERIFY(!r.hasError());
         QCOMPARE(mCaps->ReadValue({{"offset", 14}}), caps.mid(14));
     }
 
@@ -156,7 +176,8 @@ private slots:
         QCOMPARE(n.hints.value("x-asteroid-phone-id").toString(), QStringLiteral("7"));
         QCOMPARE(n.hints.value("x-nemo-preview-summary").toString(), QStringLiteral("Alex"));
         QCOMPARE(n.hints.value("x-nemo-preview-body").toString(), QStringLiteral("Lunch & a <walk>?"));
-        QCOMPARE(n.hints.value("x-nemo-feedback").toString(), QStringLiteral("notif_normal"));
+        // stock's system alert (db29902: the mute model has two alerts, message and system)
+        QCOMPARE(n.hints.value("x-nemo-feedback").toString(), QStringLiteral("notif_default"));
         QCOMPARE(n.hints.value("urgency").toInt(), 3);
         QVERIFY(!n.hints.contains("x-asteroid-phone-actions"));
         QVERIFY(!n.hints.contains("x-nemo-timestamp"));
@@ -175,19 +196,28 @@ private slots:
     {
         QTest::addColumn<QByteArray>("vb");
         QTest::addColumn<QString>("feedback");
-        QTest::newRow("absent (old phones)") << QByteArray() << "notif_strong";
-        QTest::newRow("none") << QByteArray("<vb>none</vb>") << "notif_silent";
-        QTest::newRow("normal") << QByteArray("<vb>normal</vb>") << "notif_normal";
-        QTest::newRow("strong") << QByteArray("<vb>strong</vb>") << "notif_strong";
-        QTest::newRow("ringtone") << QByteArray("<vb>ringtone</vb>") << "ringtone";
-        QTest::newRow("unknown") << QByteArray("<vb>loud</vb>") << "notif_strong";
+        // Stock has two notification alerts (db29902): a message's (category msg, or a
+        // conversation) and the system one; a call ringing on the phone only vibrates on the watch
+        // (f92d67f, eos_phone_ringing), an alarm there has its own pattern; <vb>none</vb> is muted
+        QTest::addColumn<QByteArray>("extra");
+        QTest::newRow("absent (old phones)") << QByteArray() << "notif_default" << QByteArray();
+        QTest::newRow("none") << QByteArray("<vb>none</vb>") << "notif_silent" << QByteArray();
+        QTest::newRow("normal") << QByteArray("<vb>normal</vb>") << "notif_default" << QByteArray();
+        QTest::newRow("strong") << QByteArray("<vb>strong</vb>") << "notif_default" << QByteArray();
+        QTest::newRow("ringtone") << QByteArray("<vb>ringtone</vb>") << "eos_phone_ringing" << QByteArray();
+        QTest::newRow("alarm") << QByteArray("<vb>alarm</vb>") << "eos_phone_alarm" << QByteArray();
+        QTest::newRow("unknown") << QByteArray("<vb>loud</vb>") << "notif_default" << QByteArray();
+        QTest::newRow("message") << QByteArray("<vb>normal</vb>") << "notif_message" << QByteArray("<ca>msg</ca>");
     }
 
     void vibration()
     {
         QFETCH(QByteArray, vb);
         QFETCH(QString, feedback);
-        write(mUpdate, insert(8, "<su>S</su>" + vb));
+        QFETCH(QByteArray, extra);
+        // a new phone id each row: a new card (an update of the same content does not alert)
+        static int phoneId = 800;
+        write(mUpdate, insert(++phoneId, "<su>S</su>" + vb + extra));
         QCOMPARE(lastNotify().hints.value("x-nemo-feedback").toString(), feedback);
     }
 
@@ -196,12 +226,24 @@ private slots:
         write(mUpdate, insert(9, "<su>One</su>"));
         const uint id = lipstickId(9);
         QVERIFY(id);
-        write(mUpdate, insert(9, "<su>Two</su><x-new>skipped</x-new>"));
+        // The same content again (an unknown element skipped): the card in place, quietly
+        write(mUpdate, insert(9, "<su>One</su><x-new>skipped</x-new>"));
         QCOMPARE(mLip->notifyCalls().size(), 2);
         QCOMPARE(lastNotify().id, id);
-        QCOMPARE(lastNotify().summary, QStringLiteral("Two"));
+        QCOMPARE(lastNotify().hints.value("x-nemo-feedback").toString(), QStringLiteral("notif_silent"));
         QCOMPARE(lipstickId(9), id);
+        // New content that alerts (b80e634, protocol 4): the old card goes, a new one comes at the top
+        write(mUpdate, insert(9, "<su>Two</su>"));
+        QTRY_COMPARE(mLip->closeCalls(), QList<uint>{id});
+        QCOMPARE(mLip->notifyCalls().size(), 3);
+        QCOMPARE(lastNotify().id, 0u);
+        QCOMPARE(lastNotify().summary, QStringLiteral("Two"));
+        QVERIFY(lipstickId(9) != 0 && lipstickId(9) != id);
         QCOMPARE(mService->mKnownAndroidNotifs.size(), 1);
+        // its close (by btsyncd) is not a dismiss for the phone
+        mLip->emitClosed(id, 3);
+        QTest::qWait(200);
+        QVERIFY(mChunks.isEmpty());
     }
 
     void actionsBecomeButtons()
@@ -210,8 +252,9 @@ private slots:
         const LipNotification n = lastNotify();
         QCOMPARE(n.actions, (QStringList{"reply", "Reply", "open", "Open on phone", "mute", "Mute app",
                                          "later", "later"}));
+        // the actions as parsed, trimmed (b80e634)
         QCOMPARE(n.hints.value("x-asteroid-phone-actions").toString(),
-                 QStringLiteral("reply, open,dismiss,mute,later"));
+                 QStringLiteral("reply,open,dismiss,mute,later"));
         QVERIFY(!n.hints.contains("x-nemo-timestamp"));     // not a call
     }
 
@@ -388,13 +431,15 @@ private slots:
         QXmlStreamReader r(feedback());
         QVERIFY(r.readNextStartElement());
         QCOMPARE(r.name(), QLatin1String("action"));
-        // Done on the watch: closed, and its close is not a dismiss
-        QTRY_COMPARE(mLip->closeCalls(), QList<uint>{id});
-        QCOMPARE(lipstickId(23), 0u);
-        mChunks.clear();
-        mLip->emitClosed(id, 2);
-        QTest::qWait(200);
-        QVERIFY(mChunks.isEmpty());
+        // The card stays, as on Wear OS (ef8a4da): the phone's update with the reply in it replaces
+        // it in place without alerting (ReplyEchoMs), or the phone removes it
+        QTest::qWait(300);
+        QVERIFY(mLip->closeCalls().isEmpty());
+        QCOMPARE(lipstickId(23), id);
+        write(mUpdate, insert(23, "<su>S</su><bo>On my way &lt;3 &amp; ü</bo><ac>reply</ac>"));
+        QCOMPARE(lastNotify().id, id);
+        QCOMPARE(lastNotify().hints.value("x-nemo-feedback").toString(), QStringLiteral("notif_silent"));
+        QVERIFY(!lastNotify().hints.contains("x-nemo-preview-summary"));
     }
 
     void replyNeedsTextAndAKnownNotification()
@@ -483,9 +528,12 @@ private slots:
         write(mReplies, "<replies></replies>");
         QVERIFY(!MDConfItem::store().contains(REPLIES_KEY));
         QCOMPARE(MDConfItem::unsets(), 1);
-        // Another root changes nothing
+        // Another root changes nothing (counted from here: since FP-B1 the insert above also wrote
+        // the phone's known apps, notifications/known-apps)
+        const int writes = MDConfItem::sets() + MDConfItem::unsets();
         write(mReplies, "<other><r>x</r></other></replies>");
-        QCOMPARE(MDConfItem::sets() + MDConfItem::unsets(), 2);
+        QCOMPARE(MDConfItem::sets() + MDConfItem::unsets(), writes);
+        QVERIFY(!MDConfItem::store().contains(REPLIES_KEY));
         // and the next list parses from a clean reader
         write(mReplies, "<replies><r>Later</r></replies>");
         QCOMPARE(MDConfItem::store().value(REPLIES_KEY).toStringList(), QStringList{"Later"});
@@ -536,8 +584,9 @@ private slots:
         QCOMPARE(mService->callTimestamp(510), QStringLiteral("2026-10-01T11:00:00Z"));
         QCOMPARE(mService->callTimestamp(500), QString());
 
-        // The phone's update finds it, a restored call can be silenced
-        write(mUpdate, insert(31, "<su>again</su><ac>reply</ac>"));
+        // The phone's resync after the restart finds it (new content that alerts would post it anew
+        // at the top, b80e634), a restored call can be silenced
+        write(mUpdate, insert(31, "<su>again</su><ac>reply</ac><rs>1</rs>"));
         QCOMPARE(lastNotify().id, 500u);
         const int before = mLip->notifyCalls().size();
         QVERIFY(mService->silence(510));
@@ -579,42 +628,33 @@ private slots:
         QVERIFY(mChunks.isEmpty());
     }
 
-    void junkAfterAnInsertLosesTheNextOne()
+    void junkAfterAnInsertDoesNotLoseTheNextOne()
     {
-        // Static review finding 6 (notificationservice.cpp, mReader.addData):
-        // a write that does not end exactly with "</insert>" (here a stray
-        // newline after it) is never parsed nor cleared, so the next
-        // notification is parsed from the stale start: the phone's second
-        // notification is lost and the first one is shown again.
+        // Static review finding 6 (a write that did not end exactly with "</insert>" was never
+        // parsed nor cleared, so the next notification was lost): fixed by 15e6713, the writes are
+        // joined until each message closes (MessageJoiner); what follows is the next message
         write(mUpdate, insert(37, "<su>first</su>") + "\n");
         write(mUpdate, insert(38, "<su>second</su>"));
-        QEXPECT_FAIL("", "bug: stale reader data (patches/btsyncd/0001); the first notification is parsed instead", Continue);
         QCOMPARE(lastNotify().summary, QStringLiteral("second"));
-        QEXPECT_FAIL("", "bug: stale reader data (patches/btsyncd/0001)", Continue);
+        QVERIFY(lipstickId(37) != 0);
         QVERIFY(lipstickId(38) != 0);
     }
 
     void closingTagSplitOverWrites()
     {
-        // PROTOCOL-notification-actions.md: "A value may span several writes
-        // [...]; the receiver joins them until the closing tag". The parser
-        // only looks at the end of each write, so a phone that splits its
-        // writes inside "</insert>" loses that notification (and, as above,
-        // garbles the next one). BlueZ joins a long (prepared) write into one
-        // WriteValue, so today's Gadgetbridge is not hit; a client that
-        // chunks itself (as it does for voice results) would be.
+        // PROTOCOL-notification-actions.md: "A value may span several writes [...]; the receiver
+        // joins them until the closing tag". Lost before 15e6713, which joins them
         const QByteArray xml = insert(39, "<su>split</su>");
         mUpdate->WriteValue(xml.left(xml.size() - 4), {});
+        QCOMPARE(mLip->notifyCalls().size(), 0);
         mUpdate->WriteValue(xml.right(4), {});      // "ert>"
-        QEXPECT_FAIL("", "bug: closing tag split over writes (patches/btsyncd/0001)", Continue);
         QCOMPARE(mLip->notifyCalls().size(), 1);
         // the same for a removal
         mService->mKnownAndroidNotifs.insert(40, 4000);
         mLip->reset();
         mUpdate->WriteValue("<removed><id>40</id></rem", {});
         mUpdate->WriteValue("oved>", {});
-        QEXPECT_FAIL("", "bug: closing tag split over writes (patches/btsyncd/0001)", Continue);
-        QCOMPARE(mLip->closeCalls(), QList<uint>{4000});
+        QTRY_COMPARE(mLip->closeCalls(), QList<uint>{4000});
     }
 };
 

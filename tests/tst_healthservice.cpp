@@ -108,7 +108,8 @@ private slots:
 
     void capabilities()
     {
-        const QByteArray caps = "<health><version>1</version><types>hr,steps</types><mx>1000</mx></health>";
+        // version 2 (502eb0e): every heart rate reading as hrr, hr a median a minute
+        const QByteArray caps = "<health><version>2</version><types>hr,steps,hrr</types><mx>1000</mx></health>";
         QCOMPARE(mCaps->ReadValue({}), caps);
         QCOMPARE(mCaps->ReadValue({{"offset", 9}}), caps.mid(9));
         QCOMPARE(mCaps->ReadValue({{"offset", 0}}), caps);

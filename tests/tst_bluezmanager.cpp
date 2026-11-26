@@ -6,7 +6,8 @@
  *     periodic check finds no active advertisement (not while connected)
  *   - refreshing only on the BlueZ properties it reads (a device's RSSI
  *     while discovering must not fetch the whole object tree)
- *   - the connected / disconnected toast, a failing GetManagedObjects
+ *   - no connected / disconnected toast (since 8362e14: the launcher shows the link), a failing
+ *     GetManagedObjects
  * Addresses are synthetic (00:00:5E:00:53:xx).
  */
 #include "bluezmanager.h"
@@ -130,12 +131,10 @@ private slots:
         mBluez->setDevice(true, false, false);
         mBluez->emitPropertiesChanged(FakeBluez::DevicePath, DEVICE, {{"Connected", true}});
         QTRY_COMPARE(connected.size(), 1);
-        QTRY_COMPARE(mLip->notifyCalls().size(), 1);
-        LipNotification toast = mLip->notifyCalls().last();
-        QCOMPARE(toast.body, QStringLiteral("Test Phone"));
-        QCOMPARE(toast.appIcon, QStringLiteral("ios-bluetooth-outline"));
-        QCOMPARE(toast.hints.value("transient").toBool(), true);
-        QCOMPARE(toast.hints.value("x-nemo-feedback").toString(), QStringLiteral("notif_silent"));
+        QVERIFY(mManager->connected());
+        // no "connected" toast any more (8362e14, no connection notices)
+        settle();
+        QVERIFY(mLip->notifyCalls().isEmpty());
 
         // services resolved: ANCS and CTS look for the phone's services
         const int gets = calls("GetManagedObjects");
@@ -147,10 +146,9 @@ private slots:
         mBluez->setDevice(false, false, false);
         mBluez->emitPropertiesChanged(FakeBluez::DevicePath, DEVICE, {{"Connected", false}}, {"ServicesResolved"});
         QTRY_COMPARE(connected.size(), 2);
-        QTRY_COMPARE(mLip->notifyCalls().size(), 2);
-        toast = mLip->notifyCalls().last();
-        QCOMPARE(toast.body, QString());
-        QCOMPARE(toast.appIcon, QStringLiteral("ios-bluetooth-off-outline"));
+        QVERIFY(!mManager->connected());
+        settle();
+        QVERIFY(mLip->notifyCalls().isEmpty());
     }
 
     void onlyThePropertiesItReads()
@@ -295,7 +293,7 @@ private slots:
         mBluez->addDevice(true, false, "Test Phone");
         QVERIFY(mPeers->startBluez());
         create();
-        QTRY_COMPARE(mLip->notifyCalls().size(), 1);    // connected
+        QTRY_VERIFY(mManager->connected());
         QSignalSpy connected(mManager, &BlueZManager::connectedChanged);
         QSignalSpy adapter(mManager, &BlueZManager::adapterChanged);
         mBluez->setFailGetManagedObjects(true);

@@ -10,10 +10,14 @@
  *   - stop / cancel / phone errors / timeouts / unsubscribe, session ids
  *   - result write framing (split, trailing bytes, junk, overflow)
  *   - VoiceProtocol edge cases beyond voice_test (WAV chunks, ADPCM limits)
+ * The phone's recogniser throughout: since c2b6d61 the watch's is the default
+ * (voicelocal_test), BTSYNCD_VOICE_RECOGNITION=phone selects the phone's; and since
+ * dce8f79 the phone is there only while its link is (the notifications' subscription here).
  */
 #include "voiceservice.h"
 #include "voiceprotocol.h"
 #include "voicesource.h"
+#include "voicecond.h"
 #include "notificationservice.h"
 #include "mdconfitem.h"
 #include "testmain.h"
@@ -101,6 +105,7 @@ private slots:
     void initTestCase()
     {
         QVERIFY(mDir.isValid());
+        qputenv("BTSYNCD_VOICE_RECOGNITION", "phone");
         if (haveTestBus()) {
             mPeers = new FakePeers;
             QVERIFY(mPeers->startLipstick());
@@ -109,6 +114,9 @@ private slots:
             connect(fb, &NotificationsFeedbackChrc::valueChanged, this, [this, fb] {
                 mFeedback << fb->property("Value").toByteArray();
             });
+            // the phone is connected (its feedback subscription; no BlueZ link information here)
+            fb->StartNotify();
+            QVERIFY(mNotifications->phoneConnected());
         }
         mVoice = new VoiceService(7, QDBusConnection::systemBus(), mNotifications, this);
         const QList<Characteristic *> chrcs = mVoice->getCharacteristics();
@@ -296,8 +304,15 @@ private slots:
                             reinterpret_cast<qint16 *>(pcm.data()) + seq * FrameSamples);
             }
         }
-        // the decoded audio is the sine (ADPCM: > 20 dB)
-        const QByteArray ref = sine(10 * FrameSamples);
+        // the decoded audio is the sine as the conditioner made it fit for the phone's recogniser
+        // (c2b6d61: the first 100 ms muted, DC blocker, gain x4 with a soft limit), ADPCM: > 20 dB
+        QByteArray ref = sine(10 * FrameSamples);
+        {
+            VoiceConditioner cond;
+            cond.reset(VoiceConditioner::Options());
+            for (int f = 0; f < 10; f++)
+                cond.process(reinterpret_cast<qint16 *>(ref.data()) + f * FrameSamples, FrameSamples);
+        }
         const qint16 *a = reinterpret_cast<const qint16 *>(ref.constData());
         const qint16 *b = reinterpret_cast<const qint16 *>(pcm.constData());
         double sig = 0, err = 0;
