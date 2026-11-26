@@ -27,6 +27,7 @@
 #include "service.h"
 
 class QTimer;
+class CalendarEventsChrc;
 class CalendarStore;
 
 /*
@@ -104,9 +105,14 @@ public:
     static const int MaxReminders = 5;
     static const int MaxReminderMinutes = 40320;
 
+public slots:
+    // The phone's link (NotificationService::phoneConnectedChanged)
+    void phoneConnectedChanged(bool connected);
+
 private:
     void scheduleSave();
 
+    CalendarEventsChrc *mEvents = nullptr;
     CalendarStore *mStore = nullptr;
     QTimer *mSaveTimer = nullptr;
     bool mSyncing = false;

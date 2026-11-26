@@ -35,7 +35,8 @@
  * elements, at offset 0) while the last one is incomplete means the rest of
  * that one was lost (a disconnection): it is dropped, as is more than
  * maxBytes without an end. Text cannot contain the closing tag (XML escapes
- * '<'), and the protocol nests no root element in another.
+ * '<'), and the protocol nests no root element in another. An empty element
+ * (<clear/>) is a whole message.
  */
 class MessageJoiner
 {
@@ -87,11 +88,17 @@ public:
                 continue;
             }
             const QByteArray name = mBuffer.mid(1, i - 1);
-            const QByteArray close = "</" + name + ">";
-            const int c = mBuffer.indexOf(close, i);
-            if(c < 0)
-                break;          // the rest is still coming
-            const int end = c + close.size();
+            const int gt = mBuffer.indexOf('>', i);
+            if(gt < 0)
+                break;          // the start tag is still coming
+            int end = gt + 1;
+            if(mBuffer.at(gt - 1) != '/') {
+                const QByteArray close = "</" + name + ">";
+                const int c = mBuffer.indexOf(close, gt + 1);
+                if(c < 0)
+                    break;          // the rest is still coming
+                end = c + close.size();
+            }
             messages << qMakePair(name, mBuffer.left(end));
             mBuffer.remove(0, end);
         }
@@ -121,7 +128,7 @@ private:
     {
         const QByteArray v = value.trimmed();
         for(const QByteArray &root : mRoots) {
-            if(v.startsWith("<" + root + ">") || v.startsWith("<" + root + " "))
+            if(v.startsWith("<" + root + ">") || v.startsWith("<" + root + " ") || v.startsWith("<" + root + "/"))
                 return true;
         }
         return false;

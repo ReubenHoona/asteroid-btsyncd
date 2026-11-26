@@ -33,6 +33,7 @@
 #include <KCalendarCore/Alarm>
 #include <KCalendarCore/Event>
 #include <QRegularExpression>
+#include "messagejoiner.h"
 
 static const char CAPABILITIES[] = "<capabilities><version>2</version></capabilities>";
 
@@ -212,61 +213,29 @@ class CalendarEventsChrc : public Characteristic
 {
 public:
     CalendarEventsChrc(QDBusConnection bus, unsigned int index, CalendarService *service)
-      : Characteristic(bus, index, CAL_EVENTS_UUID, {"encrypt-authenticated-write"}, service, service), mService(service) {}
+      : Characteristic(bus, index, CAL_EVENTS_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
+        // every complete element: <name>...</name> or <name/>; one that begins (at offset 0) while
+        // another is incomplete means the rest of that one was lost
+        mJoiner("Calendar", {"sync", "ev", "del", "clear", "un"}, MaxPending) {}
+
+    // The phone is gone: an element cut by the disconnection never ends, and the next sync of the
+    // phone begins with <sync>begin</sync> (it was taken for the rest of the cut element)
+    void drop(const char *why) { mJoiner.drop(why); }
 
 public slots:
-    void WriteValue(QByteArray value, QVariantMap) override
+    void WriteValue(QByteArray value, QVariantMap options) override
     {
         // Awake until the events are stored (the save follows 500 ms after
         // the last write)
         WakeHold::hold();
-        handle(value);
+        for(const auto &element : mJoiner.add(value, MessageJoiner::offsetOf(options)))
+            mService->handleElement(element.second);
         WakeHold::release(WakeHold::GRACE_NOTIFICATION_MS);
     }
 
 private:
-    void handle(const QByteArray &value)
-    {
-        mPending += value;
-        // Every complete element: <name>...</name> or <name/>
-        for(;;) {
-            int start = mPending.indexOf('<');
-            if(start < 0) {
-                mPending.clear();
-                return;
-            }
-            if(start > 0)
-                mPending.remove(0, start);
-            int nameEnd = 1;
-            while(nameEnd < mPending.size() && mPending[nameEnd] != '>' && mPending[nameEnd] != '/'
-                  && mPending[nameEnd] != ' ')
-                nameEnd++;
-            const int tagEnd = mPending.indexOf('>');
-            if(tagEnd < 0 || nameEnd >= mPending.size())
-                break;
-            const QByteArray name = mPending.mid(1, nameEnd - 1);
-            int end;
-            if(mPending[tagEnd - 1] == '/') {
-                end = tagEnd + 1;
-            } else {
-                const QByteArray close = "</" + name + ">";
-                const int closeAt = mPending.indexOf(close, tagEnd);
-                if(closeAt < 0)
-                    break;
-                end = closeAt + close.size();
-            }
-            const QByteArray element = mPending.left(end);
-            mPending.remove(0, end);
-            mService->handleElement(element);
-        }
-        if(mPending.size() > MaxPending) {
-            qWarning() << "Calendar: an element without an end, dropped";
-            mPending.clear();
-        }
-    }
-
     CalendarService *mService;
-    QByteArray mPending;
+    MessageJoiner mJoiner;
 };
 
 class CalendarCapabilitiesChrc : public Characteristic
@@ -287,7 +256,8 @@ public slots:
 CalendarService::CalendarService(int index, QDBusConnection bus, QObject *parent)
     : Service(bus, index, CALENDAR_UUID, parent)
 {
-    addCharacteristic(new CalendarEventsChrc(bus, 0, this));
+    mEvents = new CalendarEventsChrc(bus, 0, this);
+    addCharacteristic(mEvents);
     addCharacteristic(new CalendarCapabilitiesChrc(bus, 1, this));
     mStore = new CalendarStore;
     // A sync writes many events: saved together
@@ -295,6 +265,12 @@ CalendarService::CalendarService(int index, QDBusConnection bus, QObject *parent
     mSaveTimer->setSingleShot(true);
     mSaveTimer->setInterval(500);
     connect(mSaveTimer, &QTimer::timeout, this, [this] { mStore->save(); });
+}
+
+void CalendarService::phoneConnectedChanged(bool connected)
+{
+    if(!connected)
+        mEvents->drop("the phone is gone");
 }
 
 CalendarService::~CalendarService()

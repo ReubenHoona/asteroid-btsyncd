@@ -336,6 +336,42 @@ int main(int argc, char **argv)
         spin(200);
     }
 
+    // An event cut by the disconnection (the phone went in the middle of a sync): the next sync
+    // begins afresh. Before, the rest of the cut event swallowed the <sync>begin</sync> and the
+    // first event of the next sync, and the end of that sync then removed that event
+    {
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<ev><id>201</id><ti>Kept</ti><st>" + QByteArray::number(t0) + "</st></ev>");
+        write(driver, "<ev><id>202</id><ti>Gone on the phone</ti><st>" + QByteArray::number(t0) + "</st></ev>");
+        write(driver, "<sync>end</sync>");
+        spin(300);
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<ev><id>201</id><ti>Kept</ti><st>17672");
+        // the link goes and comes back (NotificationService::phoneConnectedChanged in
+        // application.cpp; by name, as 70c7fb3 has no such slot)
+        QMetaObject::invokeMethod(service, "phoneConnectedChanged", Q_ARG(bool, false));
+        QMetaObject::invokeMethod(service, "phoneConnectedChanged", Q_ARG(bool, true));
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<ev><id>201</id><ti>Kept</ti><st>" + QByteArray::number(t0) + "</st></ev>");
+        write(driver, "<ev><id>203</id><ti>New</ti><st>" + QByteArray::number(t0 + 3600) + "</st></ev>");
+        write(driver, "<sync>end</sync>");
+        spin(600);
+        QHash<QString, KCalendarCore::Event::Ptr> events = readBack();
+        CHECK(events.contains(uid("201")));
+        CHECK(events.contains(uid("203")) && events.value(uid("203"))->summary() == "New");
+        CHECK(!events.contains(uid("202")));
+        CHECK(events.size() == 2);
+        // the same without the link information: a sync that begins drops the element left incomplete
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<ev><id>203</id><ti>New</ti><st>17672");
+        write(driver, "<sync>begin</sync>");
+        write(driver, "<ev><id>201</id><ti>Kept again</ti><st>" + QByteArray::number(t0) + "</st></ev>");
+        write(driver, "<sync>end</sync>");
+        spin(600);
+        events = readBack();
+        CHECK(events.size() == 1 && events.contains(uid("201")) && events.value(uid("201"))->summary() == "Kept again");
+    }
+
     // Clear
     write(driver, "<clear/>");
     spin(1200);

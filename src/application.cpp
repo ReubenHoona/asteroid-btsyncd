@@ -59,7 +59,9 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     addService(new VoiceService(7, bus, notifications));
 #ifdef BTSYNCD_HAVE_CALENDAR
     // The phone's calendar into mkcal
-    addService(new CalendarService(8, bus));
+    CalendarService *calendar = new CalendarService(8, bus);
+    addService(calendar);
+    connect(notifications, &NotificationService::phoneConnectedChanged, calendar, &CalendarService::phoneConnectedChanged);
 #endif
     // The phone's battery and Do Not Disturb (protocol version 4)
     addService(new PhoneStatusService(9, bus, notifications));
