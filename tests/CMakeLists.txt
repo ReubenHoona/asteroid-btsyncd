@@ -120,7 +120,8 @@ btsyncd_test(messaging_test DCONF SOURCES ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEE
 btsyncd_test(notifw2_test DCONF SOURCES ${NOTIF} ${SRC}/calllog.cpp LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
 
 # The phone status service (battery, Do Not Disturb, disconnected notice); the modes on it
-btsyncd_test(phonestatus_test BUS SOURCES ${SRC}/phonestatusservice.cpp ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+# (since f421265 the phone's Do Not Disturb and the watch's Bedtime meet in dconf: DCONF)
+btsyncd_test(phonestatus_test DCONF SOURCES ${SRC}/phonestatusservice.cpp ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
 btsyncd_test(modes_test DCONF SOURCES ${SRC}/phonestatusservice.cpp ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
 
 # The battery service (level and charging from a fake mce)
