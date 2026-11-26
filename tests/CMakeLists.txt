@@ -1,180 +1,192 @@
-# Tests of the health records and the voice protocol without D-Bus (cmake -DBTSYNCD_TESTS=ON).
-# Cross-built with the SDK, they run under qemu-arm; see the health sync
-# build script.
-add_executable(healthrecords_test healthrecords_test.cpp ../src/healthrecords.cpp)
-target_include_directories(healthrecords_test PRIVATE ../src)
-target_link_libraries(healthrecords_test PRIVATE Qt6::Core PkgConfig::SQLITE3)
+# Tests of asteroid-btsyncd (see README.md; tests/run.sh builds and runs them all).
+#
+# Two ways to build them:
+#   - with the daemon (cmake -DBTSYNCD_TESTS=ON at the top): the SDK build of the recipe, against
+#     AsteroidOS's libraries (mlite, libkeepalive, AmberMpris, mkcal). Its asteroid-btsyncd-tests
+#     package installs voice_test, healthrecords_test and assistant_test. The Qt Test suites (tst_*)
+#     are built there too with -DBTSYNCD_QTESTS=ON (tests/run.sh --cross does), not in the image build.
+#   - on their own (cmake -S tests): a native build against the distribution's Qt 6. What Debian
+#     does not have is replaced by the stubs in stubs/ (mlite's MDConfItem, libkeepalive's
+#     BackgroundActivity); the tests that need AmberMpris or mkcal are left out when those are not
+#     found. Coverage: -DBTSYNCD_COVERAGE=ON (.sonar/coverage.sh).
+#
+# Every test is registered with ctest. testenv.sh gives each one a scratch HOME and, for the tests
+# that talk D-Bus, a private bus that is both the session and the system bus; with the real mlite
+# the dconf tests get a dconf-service of their own on it (DCONF_SERVICE, or found in PATH / libexec).
+# Cross builds run under CMAKE_CROSSCOMPILING_EMULATOR (qemu-aarch64 -L sysroot).
+cmake_minimum_required(VERSION 3.16)
 
-# The assistant relay's XML
-add_executable(assistant_test assistant_test.cpp ../src/assistantprotocol.cpp ../src/contactnames.cpp)
-target_include_directories(assistant_test PRIVATE ../src)
-target_link_libraries(assistant_test PRIVATE Qt6::Core)
-
-# The assistant relay follows the phone's link, on a private bus like
-# notifications_test
-add_executable(assistantlink_test assistantlink_test.cpp ../src/assistantservice.cpp ../src/assistantprotocol.cpp ../src/contactnames.cpp
-	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(assistantlink_test PRIVATE ../src)
-target_link_libraries(assistantlink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-add_executable(voice_test voice_test.cpp ../src/voiceprotocol.cpp ../src/voicecond.cpp)
-target_include_directories(voice_test PRIVATE ../src)
-target_link_libraries(voice_test PRIVATE Qt6::Core)
-
-# Voice replies recognised on the watch, with a fake asteroid-assistant, on a
-# private bus like notifications_test
-add_executable(voicelocal_test voicelocal_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp ../src/voicecond.cpp
-	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(voicelocal_test PRIVATE ../src)
-target_link_libraries(voicelocal_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# A voice reply recognised by the phone ends when the phone's link drops
-add_executable(voicelink_test voicelink_test.cpp ../src/voiceservice.cpp ../src/voicesource.cpp ../src/voiceprotocol.cpp ../src/voicecond.cpp
-	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(voicelink_test PRIVATE ../src)
-target_link_libraries(voicelink_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# The calls on the watch with a fake oFono and BlueZ, on a private bus with a dconf
-# service like weather_test (see the top of the source)
-add_executable(calls_test calls_test.cpp ../src/callaudio.cpp)
-target_include_directories(calls_test PRIVATE ../src)
-target_link_libraries(calls_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE)
-
-# The notification service on a private bus (see the top of the source):
-# dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS notifications_test'
-add_executable(notifications_test notifications_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(notifications_test PRIVATE ../src)
-target_link_libraries(notifications_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# Notification pictures (reassembly, checks, reconnections, cleanup) on a private bus
-# like notifications_test
-add_executable(pictures_test pictures_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(pictures_test PRIVATE ../src)
-target_link_libraries(pictures_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# The phone status service (battery, Do Not Disturb, disconnected notice)
-# with the notification service, on a private bus like notifications_test
-add_executable(phonestatus_test phonestatus_test.cpp ../src/phonestatusservice.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(phonestatus_test PRIVATE ../src)
-target_link_libraries(phonestatus_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# The modes on the phone status service: Bedtime with the phone's Do Not
-# Disturb both ways, Bedtime and Theater silencing phone notifications, on a
-# private bus like notifications_test (with a dconf database of its own)
-add_executable(modes_test modes_test.cpp ../src/phonestatusservice.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(modes_test PRIVATE ../src)
-target_link_libraries(modes_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# The battery service (the level and whether it charges, from a fake mce) on a
-# private bus like notifications_test
-add_executable(battery_test battery_test.cpp ../src/batteryservice.cpp ../src/batterystatus.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
-target_include_directories(battery_test PRIVATE ../src)
-target_link_libraries(battery_test PRIVATE Qt6::Core Qt6::DBus)
-
-# The weather service (the forecast's location from the phone) on a private bus
-# with a dconf-service, like notifications_test
-add_executable(weather_test weather_test.cpp ../src/weatherservice.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(weather_test PRIVATE ../src)
-target_link_libraries(weather_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# The calendar service with a temporary mkcal database (MKCAL_STORAGEDB), on a
-# private bus like notifications_test
-if(MKCAL_FOUND AND KCALCORE_FOUND)
-	add_executable(calendar_test calendar_test.cpp ../src/calendarservice.cpp
-		../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-	target_include_directories(calendar_test PRIVATE ../src)
-	target_link_libraries(calendar_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MKCAL PkgConfig::KCALCORE PkgConfig::KEEPALIVE PkgConfig::MLITE)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+	project(asteroid-btsyncd-tests LANGUAGES CXX)
+	set(CMAKE_CXX_STANDARD 17)
+	set(CMAKE_CXX_STANDARD_REQUIRED ON)
+	set(CMAKE_AUTOMOC ON)
+	find_package(Qt6 REQUIRED COMPONENTS Core DBus Test)
+	find_package(PkgConfig REQUIRED)
+	pkg_check_modules(SQLITE3 sqlite3 REQUIRED IMPORTED_TARGET)
+	pkg_check_modules(MLITE mlite6 IMPORTED_TARGET)
+	pkg_check_modules(KEEPALIVE keepalive IMPORTED_TARGET)
+	pkg_check_modules(AmberMpris ambermpris6 IMPORTED_TARGET)
+	pkg_check_modules(MKCAL libmkcal-qt6 IMPORTED_TARGET)
+	pkg_check_modules(KCALCORE KF6CalendarCore IMPORTED_TARGET)
+	option(BTSYNCD_COVERAGE "Build with gcc --coverage" OFF)
+	if(BTSYNCD_COVERAGE)
+		add_compile_options(--coverage -O0 -g)
+		add_link_options(--coverage)
+	endif()
+	set(BTSYNCD_QTESTS ON)
+else()
+	find_package(Qt6 QUIET COMPONENTS Test)
+	option(BTSYNCD_QTESTS "Also build the Qt Test suites (tst_*)" OFF)
 endif()
 
-# M5 messaging polish: quiet on the charger (a fake mce), the user's own messages of a
-# conversation (<me>, the x-asteroid-messages hint), the app's notifications off and on
-# from the watch (SetAppNotifications); on a private bus with a dconf-service, like
-# weather_test
-add_executable(messaging_test messaging_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(messaging_test PRIVATE ../src)
-target_link_libraries(messaging_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+enable_testing()
+set(SRC ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+set(TESTENV ${CMAKE_CURRENT_SOURCE_DIR}/testenv.sh)
 
-# The pictures of a conversation's messages (<pc> in an <m>), on a private bus like pictures_test
-add_executable(msgpictures_test msgpictures_test.cpp ../src/notificationservice.cpp ../src/batterystatus.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(msgpictures_test PRIVATE ../src)
-target_link_libraries(msgpictures_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+# mlite and libkeepalive, or the stubs (both or neither)
+if(MLITE_FOUND AND KEEPALIVE_FOUND)
+	set(BTSYNCD_STUBS OFF)
+	set(MLITE PkgConfig::MLITE)
+	set(KEEPALIVE PkgConfig::KEEPALIVE)
+else()
+	set(BTSYNCD_STUBS ON)
+	set(MLITE "")
+	set(KEEPALIVE "")
+	message(STATUS "btsyncd tests: mlite6 / keepalive not found, stubs/ instead (in-memory dconf)")
+endif()
 
-# The notification protocol of the wearui-w2 wave (action ack, sub text, progress, ongoing, resident,
-# mute model, calls in Do Not Disturb, avatars) with the frames Gadgetbridge records (tests/frames), on a private
-# bus with a dconf service like weather_test
-add_executable(notifw2_test notifw2_test.cpp ../src/notificationservice.cpp ../src/calllog.cpp ../src/batterystatus.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(notifw2_test PRIVATE ../src)
-target_compile_definitions(notifw2_test PRIVATE FRAMES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/frames")
-target_link_libraries(notifw2_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
+# The GATT plumbing every service needs, and the notification service with what it uses
+set(GATT ${SRC}/characteristic.cpp ${SRC}/service.cpp ${SRC}/descriptor.cpp)
+set(NOTIF ${SRC}/notificationservice.cpp ${SRC}/batterystatus.cpp ${GATT} ${SRC}/wakehold.cpp)
 
-# The media service's artwork, custom actions and queue (characteristics 00007008 and 00007009, media commands 5
-# and 6) on a private bus
-add_executable(media_test media_test.cpp ../src/mediaservice.cpp ../src/mediaphonedata.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(media_test PRIVATE ../src)
-target_compile_definitions(media_test PRIVATE FRAMES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/frames")
-target_link_libraries(media_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::AmberMpris PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# The advertising schedule against a fake BlueZ on a private bus (BTSYNCD_ADVERT_TIME_DIV=100)
-add_executable(advert_test advert_test.cpp ../src/advertisement.cpp ../src/bluezmanager.cpp ../src/ancs.cpp
-	../src/ancs_notification.cpp ../src/cts.cpp ../src/settime.cpp)
-target_include_directories(advert_test PRIVATE ../src)
-target_link_libraries(advert_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# The screenshot hand-off to the phone on a private bus
-add_executable(screenshot_test screenshot_test.cpp ../src/screenshotservice.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
-target_include_directories(screenshot_test PRIVATE ../src)
-target_link_libraries(screenshot_test PRIVATE Qt6::Core Qt6::DBus)
-
-# W2-btsyncd-data. The frames Gadgetbridge writes (W2-gb-data) are in tests/fixtures
-# The time characteristic's 24-hour flag and the phone's language (<lc>), on a private bus
-# with a dconf-service, like weather_test
-add_executable(phonedata_test phonedata_test.cpp ../src/timeservice.cpp ../src/settime.cpp ../src/phonestatusservice.cpp
-	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(phonedata_test PRIVATE ../src)
-target_link_libraries(phonedata_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# The Messages API over the assistant relay (a fake phone), on a private bus like assistantlink_test
-add_executable(messages_test messages_test.cpp ../src/messageservice.cpp ../src/assistantservice.cpp ../src/assistantprotocol.cpp ../src/contactnames.cpp
-	../src/notificationservice.cpp ../src/batterystatus.cpp ../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp ../src/wakehold.cpp)
-target_include_directories(messages_test PRIVATE ../src)
-target_link_libraries(messages_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# "Share heart rate": the Heart Rate Service with a fake BlueZ and a fake sensor, on a private bus
-# with a dconf-service, like weather_test
-add_executable(heartrate_test heartrate_test.cpp ../src/heartrateservice.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
-target_include_directories(heartrate_test PRIVATE ../src)
-target_link_libraries(heartrate_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# FP-B1: the phone's time against Settings > Date & time (a fake timedate1, with a dconf service)
-add_executable(timeservice_test timeservice_test.cpp ../src/timeservice.cpp ../src/settime.cpp
-	../src/characteristic.cpp ../src/service.cpp ../src/descriptor.cpp)
-target_include_directories(timeservice_test PRIVATE ../src)
-target_link_libraries(timeservice_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE)
-
-# FP-B1: vibrate on connectivity change (a fake ngfd, with a dconf service)
-add_executable(connectivity_test connectivity_test.cpp ../src/connectivityfeedback.cpp ../src/wakehold.cpp)
-target_include_directories(connectivity_test PRIVATE ../src)
-target_link_libraries(connectivity_test PRIVATE Qt6::Core Qt6::DBus PkgConfig::MLITE PkgConfig::KEEPALIVE)
-
-# FP-B2: the call log object (CR-08) on a private session bus
-add_executable(calllog_test calllog_test.cpp ../src/calllog.cpp)
-target_include_directories(calllog_test PRIVATE ../src)
-target_link_libraries(calllog_test PRIVATE Qt6::Core Qt6::DBus)
-
-foreach(t weather_test calendar_test phonedata_test messages_test)
-	if(TARGET ${t})
-		target_compile_definitions(${t} PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+# btsyncd_test(NAME [BUS] [DCONF] [QTEST] SOURCES ... LIBS ... ENV ...)
+#   BUS: on a private D-Bus (session = system); DCONF: and a dconf-service (real mlite only);
+#   QTEST: a Qt Test suite, always with the stubs (it checks what was written through them)
+function(btsyncd_test name)
+	cmake_parse_arguments(T "BUS;DCONF;QTEST" "" "SOURCES;LIBS;ENV" ${ARGN})
+	add_executable(${name} ${name}.cpp ${T_SOURCES})
+	set_target_properties(${name} PROPERTIES AUTOMOC ON)
+	target_include_directories(${name} PRIVATE ${SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/common)
+	target_compile_definitions(${name} PRIVATE FRAMES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/frames"
+		FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+	set(libs Qt6::Core ${T_LIBS})
+	if(T_QTEST OR BTSYNCD_STUBS)
+		# stubs/ first: MDConfItem and backgroundactivity.h instead of mlite / libkeepalive
+		target_include_directories(${name} BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs)
+		target_sources(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs/mdconfitem.h)
+		list(REMOVE_ITEM libs PkgConfig::MLITE PkgConfig::KEEPALIVE)
 	endif()
+	if(T_QTEST)
+		list(APPEND libs Qt6::Test)
+	endif()
+	target_link_libraries(${name} PRIVATE ${libs})
+	set(envflags)
+	if(T_BUS OR T_DCONF)
+		list(APPEND envflags --bus)
+	endif()
+	if(T_DCONF AND NOT BTSYNCD_STUBS)
+		list(APPEND envflags --dconf)
+	endif()
+	add_test(NAME ${name} COMMAND sh ${TESTENV} ${envflags} -- ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:${name}>)
+	set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${T_ENV}" TIMEOUT 300)
+endfunction()
+
+# Plain checks without D-Bus (exit status = failures). The recipe installs these three.
+btsyncd_test(healthrecords_test SOURCES ${SRC}/healthrecords.cpp LIBS PkgConfig::SQLITE3)
+btsyncd_test(voice_test SOURCES ${SRC}/voiceprotocol.cpp ${SRC}/voicecond.cpp)
+# The assistant relay's XML
+btsyncd_test(assistant_test SOURCES ${SRC}/assistantprotocol.cpp ${SRC}/contactnames.cpp)
+
+# The assistant relay follows the phone's link; the Weather app's refresh (CR-40)
+btsyncd_test(assistantlink_test DCONF SOURCES ${SRC}/assistantservice.cpp ${SRC}/assistantprotocol.cpp
+	${SRC}/contactnames.cpp ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+
+# Voice replies recognised on the watch (a fake asteroid-assistant), and by the phone
+foreach(t voicelocal_test voicelink_test)
+	btsyncd_test(${t} BUS SOURCES ${SRC}/voiceservice.cpp ${SRC}/voicesource.cpp ${SRC}/voiceprotocol.cpp
+		${SRC}/voicecond.cpp ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
 endforeach()
+
+# The calls on the watch with a fake oFono and BlueZ (BTSYNCD_CALLS_TIME_DIV: its waits 100 times shorter)
+btsyncd_test(calls_test DCONF SOURCES ${SRC}/callaudio.cpp common/odrdefs.cpp LIBS Qt6::DBus ${MLITE} ENV BTSYNCD_CALLS_TIME_DIV=100)
+
+# The notification service (protocol versions 3 and 4) with a fake lipstick; pictures; messaging polish
+foreach(t notifications_test pictures_test msgpictures_test)
+	btsyncd_test(${t} BUS SOURCES ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+endforeach()
+btsyncd_test(messaging_test DCONF SOURCES ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+# The notification protocol of the wearui-w2 wave with the frames Gadgetbridge records (frames/)
+btsyncd_test(notifw2_test DCONF SOURCES ${NOTIF} ${SRC}/calllog.cpp LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+
+# The phone status service (battery, Do Not Disturb, disconnected notice); the modes on it
+btsyncd_test(phonestatus_test BUS SOURCES ${SRC}/phonestatusservice.cpp ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+btsyncd_test(modes_test DCONF SOURCES ${SRC}/phonestatusservice.cpp ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+
+# The battery service (level and charging from a fake mce)
+btsyncd_test(battery_test BUS SOURCES ${SRC}/batteryservice.cpp ${SRC}/batterystatus.cpp ${GATT} LIBS Qt6::DBus)
+
+# The weather service (location, full forecast) with fixtures/
+btsyncd_test(weather_test DCONF SOURCES ${SRC}/weatherservice.cpp ${GATT} ${SRC}/wakehold.cpp
+	LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+
+# The calendar service with a temporary mkcal database (MKCAL_STORAGEDB)
+if(MKCAL_FOUND AND KCALCORE_FOUND)
+	btsyncd_test(calendar_test DCONF SOURCES ${SRC}/calendarservice.cpp ${GATT} ${SRC}/wakehold.cpp
+		LIBS Qt6::DBus PkgConfig::MKCAL PkgConfig::KCALCORE ${KEEPALIVE} ${MLITE})
+else()
+	message(STATUS "btsyncd tests: no mkcal / KF6CalendarCore, calendar_test left out")
+endif()
+
+# The media service's artwork, custom actions and queue (frames/)
+if(AmberMpris_FOUND)
+	btsyncd_test(media_test BUS SOURCES ${SRC}/mediaservice.cpp ${SRC}/mediaphonedata.cpp ${GATT} ${SRC}/wakehold.cpp
+		LIBS Qt6::DBus PkgConfig::AmberMpris ${MLITE} ${KEEPALIVE})
+else()
+	message(STATUS "btsyncd tests: no AmberMpris, media_test left out")
+endif()
+
+# The advertising schedule against a fake BlueZ (BTSYNCD_ADVERT_TIME_DIV: 100 times shorter)
+btsyncd_test(advert_test BUS SOURCES ${SRC}/advertisement.cpp ${SRC}/bluezmanager.cpp ${SRC}/ancs.cpp
+	${SRC}/ancs_notification.cpp ${SRC}/cts.cpp ${SRC}/settime.cpp LIBS Qt6::DBus ${MLITE} ${KEEPALIVE}
+	ENV BTSYNCD_ADVERT_TIME_DIV=100)
+
+# The screenshot hand-off to the phone
+btsyncd_test(screenshot_test BUS SOURCES ${SRC}/screenshotservice.cpp ${GATT} LIBS Qt6::DBus)
+
+# W2-btsyncd-data (fixtures/): the time characteristic's 24-hour flag and the phone's language
+btsyncd_test(phonedata_test DCONF SOURCES ${SRC}/timeservice.cpp ${SRC}/settime.cpp ${SRC}/phonestatusservice.cpp
+	${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+# The Messages API over the assistant relay (a fake phone)
+btsyncd_test(messages_test BUS SOURCES ${SRC}/messageservice.cpp ${SRC}/assistantservice.cpp ${SRC}/assistantprotocol.cpp
+	${SRC}/contactnames.cpp ${NOTIF} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+# "Share heart rate": the Heart Rate Service with a fake BlueZ and a fake sensor
+btsyncd_test(heartrate_test DCONF SOURCES ${SRC}/heartrateservice.cpp ${GATT} LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+
+# FP-B1: the phone's time against Settings > Date & time (a fake timedate1); vibrate on connectivity change
+btsyncd_test(timeservice_test DCONF SOURCES ${SRC}/timeservice.cpp ${SRC}/settime.cpp ${GATT} LIBS Qt6::DBus ${MLITE})
+btsyncd_test(connectivity_test DCONF SOURCES ${SRC}/connectivityfeedback.cpp ${SRC}/wakehold.cpp
+	LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
+
+# FP-B2: the call log object (CR-08)
+btsyncd_test(calllog_test BUS SOURCES ${SRC}/calllog.cpp LIBS Qt6::DBus)
+
+if(NOT BTSYNCD_QTESTS)
+	return()
+endif()
+if(NOT TARGET Qt6::Test)
+	message(STATUS "btsyncd tests: Qt6 Test not found, no Qt Test suites")
+	return()
+endif()
+
+# Qt Test suites against fake lipstick / BlueZ peers (common/fakepeers.h); each makes its own
+# private bus the system bus too (testmain.h)
+set(FAKES common/fakepeers.cpp common/fakepeers.h common/testmain.h)
+btsyncd_test(tst_wakehold QTEST SOURCES ${SRC}/wakehold.cpp stubs/backgroundactivity.h)
+btsyncd_test(tst_healthservice QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${GATT} ${FAKES}
+	LIBS Qt6::DBus PkgConfig::SQLITE3)
+btsyncd_test(tst_notificationservice QTEST BUS SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
+btsyncd_test(tst_voiceservice QTEST BUS SOURCES ${SRC}/voiceservice.cpp ${SRC}/voicesource.cpp ${SRC}/voiceprotocol.cpp
+	${SRC}/voicecond.cpp ${NOTIF} ${FAKES} LIBS Qt6::DBus)
+btsyncd_test(tst_bluezmanager QTEST BUS SOURCES ${SRC}/bluezmanager.cpp ${SRC}/advertisement.cpp ${SRC}/ancs.cpp
+	${SRC}/ancs_notification.cpp ${SRC}/cts.cpp ${SRC}/settime.cpp ${FAKES} LIBS Qt6::DBus)

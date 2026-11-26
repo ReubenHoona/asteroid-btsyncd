@@ -1,1 +1,5 @@
 build
+.sonar-build/
+.sonar-reports/
+.test-build/
+.test-build-cross/
