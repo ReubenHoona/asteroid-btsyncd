@@ -546,7 +546,7 @@ int main(int argc, char **argv)
         CHECK(!p.hints.contains("resident"));
         CHECK(p.hints.value("x-asteroid-find-watch").toBool() == true);
         CHECK(p.actions == (QStringList() << "found" << "Stop sound"));
-        CHECK(p.hints.value("x-nemo-feedback").toString() == "ringtone");
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "find_my_watch");
     }
 
     // ---- A muted alert: no banner, no wake, no vibration
@@ -660,11 +660,15 @@ int main(int argc, char **argv)
         write(driver, "<insert><id>136</id><vb>alarm</vb><an>Clock</an><su>Al</su><ca>alarm</ca></insert>");
         CHECK(next());
         CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "eos_phone_alarm");
+        // find my watch rings its own event, not the call's ringtone (the Ring volume)
+        write(driver, "<insert><id>137</id><vb>ringtone</vb><an>Find</an><su>Gadgetbridge</su><ac>found</ac></insert>");
+        CHECK(next());
+        CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "find_my_watch");
         mute.set(true);
         spin(200);
         CHECK(NotificationService::muteRingAndNotifications() == true);
         mute.unset();
-        write(driver, "<removed><id>133</id></removed><removed><id>134</id></removed>");
+        write(driver, "<removed><id>133</id></removed><removed><id>134</id></removed><removed><id>137</id></removed>");
         PhoneNotification n;
         n.vibrate = "ringtone";
         n.phoneActions = QStringList() << "answer" << "reject";

@@ -205,6 +205,8 @@ private slots:
         QTest::newRow("normal") << QByteArray("<vb>normal</vb>") << "notif_default" << QByteArray();
         QTest::newRow("strong") << QByteArray("<vb>strong</vb>") << "notif_default" << QByteArray();
         QTest::newRow("ringtone") << QByteArray("<vb>ringtone</vb>") << "eos_phone_ringing" << QByteArray();
+        // find my watch (a ring with the found action): its own event, loud whatever the volume
+        QTest::newRow("find my watch") << QByteArray("<vb>ringtone</vb>") << "find_my_watch" << QByteArray("<ac>found</ac>");
         QTest::newRow("alarm") << QByteArray("<vb>alarm</vb>") << "eos_phone_alarm" << QByteArray();
         QTest::newRow("unknown") << QByteArray("<vb>loud</vb>") << "notif_default" << QByteArray();
         QTest::newRow("message") << QByteArray("<vb>normal</vb>") << "notif_message" << QByteArray("<ca>msg</ca>");
@@ -219,6 +221,35 @@ private slots:
         static int phoneId = 800;
         write(mUpdate, insert(++phoneId, "<su>S</su>" + vb + extra));
         QCOMPARE(lastNotify().hints.value("x-nemo-feedback").toString(), feedback);
+    }
+
+    // The ring events: the find-my-watch alert (the phone's Find device: a ring with the found
+    // action) rings find_my_watch, which plays loud whatever Settings > Sound > Ring volume and
+    // "Mute ring & notifications" say, as stock's Find device ring; a call rings ngfd's ringtone
+    // (the Ring volume) only with that mute off, else it only vibrates (eos_phone_ringing)
+    void findMyWatchEvent_data()
+    {
+        QTest::addColumn<QStringList>("actions");
+        QTest::addColumn<bool>("muteRing");
+        QTest::addColumn<QString>("event");
+        QTest::newRow("find my watch, muted") << QStringList{"found"} << true << "find_my_watch";
+        QTest::newRow("find my watch, not muted") << QStringList{"found"} << false << "find_my_watch";
+        QTest::newRow("call, muted") << QStringList{"answer", "reject"} << true << "eos_phone_ringing";
+        QTest::newRow("call, not muted") << QStringList{"answer", "reject"} << false << "ringtone";
+        // without the found action (Gadgetbridge leaves it out below protocol 3): a ring like a call
+        QTest::newRow("ring without actions, not muted") << QStringList() << false << "ringtone";
+        QTest::newRow("ring without actions, muted") << QStringList() << true << "eos_phone_ringing";
+    }
+
+    void findMyWatchEvent()
+    {
+        QFETCH(QStringList, actions);
+        QFETCH(bool, muteRing);
+        QFETCH(QString, event);
+        PhoneNotification n;
+        n.vibrate = QStringLiteral("ringtone");
+        n.phoneActions = actions;
+        QCOMPARE(PostPlan::feedbackEvent(n, muteRing), event);
     }
 
     void updateReplacesTheSameNotification()

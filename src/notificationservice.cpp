@@ -463,9 +463,13 @@ bool PhoneNotification::hasEmoji(const QString &text)
  * As Wear OS, a call ringing on the phone and an alarm going off on the phone
  * only vibrate on the watch: the phone plays their sound. eos_phone_ringing
  * and eos_phone_alarm are ngfd's ringtone and alarm vibration patterns
- * without sound; ngfd's own ringtone and alarm events, which ring through
- * the watch speaker, stay for the watch's alarms and timers and for the
- * find-my-watch alert (it rings the watch itself, as on Wear OS).
+ * without sound; ngfd's own alarm event, which rings through the watch
+ * speaker, stays for the watch's alarms and timers. ngfd's ringtone rings a
+ * call on the watch too while "Mute ring & notifications" is off, at the Ring
+ * volume (its stream). The find-my-watch alert rings the watch itself, as on
+ * Wear OS, with its own event find_my_watch: the same ring, but loud whatever
+ * the Ring volume and the mute say (stock's Find device ring rises to full
+ * volume over 20 s).
  */
 bool PostPlan::isMessage(const PhoneNotification &n)
 {
@@ -475,9 +479,12 @@ bool PostPlan::isMessage(const PhoneNotification &n)
 QString PostPlan::feedbackEvent(const PhoneNotification &n, bool muteRing)
 {
     if(n.vibrate == QLatin1String("ringtone")) {
-        // the find-my-watch alert always rings; a call rings only with "Mute ring &
-        // notifications" off (the same ring vibration, with the ringtone)
-        if(n.phoneActions.contains("found") || !muteRing)
+        // the find-my-watch alert always rings, loud (its own event, not the Ring volume)
+        if(n.phoneActions.contains("found"))
+            return QStringLiteral("find_my_watch");
+        // a call rings at the Ring volume only with "Mute ring & notifications" off (the
+        // same ring vibration, with the ringtone)
+        if(!muteRing)
             return QStringLiteral("ringtone");
         return QStringLiteral("eos_phone_ringing");
     }

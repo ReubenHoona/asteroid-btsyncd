@@ -151,8 +151,9 @@ struct PostPlan
     // vibrates, from the phone's <vb>. Stock's sounds: a message plays the message
     // alert, every other notification the system one (events notif_message and
     // notif_default; ngfd mutes their sound while "Mute ring & notifications" is on),
-    // and a call rings the ringtone when that mute is off (muteRing false), else it only
-    // vibrates (eos_phone_ringing).
+    // a call rings the ringtone (at the Ring volume) when that mute is off (muteRing false),
+    // else it only vibrates (eos_phone_ringing), and the find-my-watch alert (the found
+    // action) rings find_my_watch, loud whatever the volume and the mute.
     static QString feedbackEvent(const PhoneNotification &n, bool muteRing = true);
     // A message (Android's message category, or a conversation with messages)
     static bool isMessage(const PhoneNotification &n);

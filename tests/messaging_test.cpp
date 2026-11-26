@@ -359,7 +359,7 @@ int main(int argc, char **argv)
     {
         const Posted p = post(driver, fake, "<insert><id>-77</id><vb>ringtone</vb><an>Find my watch</an><su>Gadgetbridge</su><ac>found</ac></insert>");
         CHECK(alerts(p));
-        CHECK(p.hints.value("x-nemo-feedback").toString() == "ringtone");
+        CHECK(p.hints.value("x-nemo-feedback").toString() == "find_my_watch");
     }
     // A conversation's new message on the charger: quiet, updated in its card
     {

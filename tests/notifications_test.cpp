@@ -286,8 +286,8 @@ int main(int argc, char **argv)
     write(driver, "<insert><id>-77</id><vb>ringtone</vb><an>Incoming call</an><su>Gadgetbridge</su><ac>found</ac></insert>");
     CHECK(waitFor([&] { return postedCount(fake) == 3; }));
     CHECK(lastPosted(fake).actions == (QStringList() << "found" << "Stop sound"));
-    // the watch itself rings (ngfd's ringtone, with sound)
-    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "ringtone");
+    // the watch itself rings (ngfd's find_my_watch, with sound, loud whatever the Ring volume)
+    CHECK(lastPosted(fake).hints.value("x-nemo-feedback").toString() == "find_my_watch");
     emitActionInvoked(fakeConn, 102, "found");
     CHECK(waitFor([&] { return collector.feedback.endsWith("</action>"); }));
     CHECK(collector.feedback == "<action><id>-77</id><ty>found</ty></action>");
@@ -930,7 +930,8 @@ int main(int argc, char **argv)
         n.phoneActions.clear();
         CHECK(PostPlan::feedbackEvent(n) == "eos_phone_ringing");
         n.phoneActions = QStringList() << "found";
-        CHECK(PostPlan::feedbackEvent(n) == "ringtone");
+        CHECK(PostPlan::feedbackEvent(n) == "find_my_watch");
+        CHECK(PostPlan::feedbackEvent(n, false) == "find_my_watch");
         n.phoneActions.clear();
         n.vibrate = "alarm";
         CHECK(PostPlan::feedbackEvent(n) == "eos_phone_alarm");
