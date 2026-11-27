@@ -30,9 +30,11 @@ const char WeightKey[] = "/org/asteroidos/health/profile/weight-kg";
 const char BirthDateKey[] = "/org/asteroidos/health/profile/birth-date";
 const char StepsGoalKey[] = "/org/asteroidos/ux/steps-goal";
 const char SleepGoalKey[] = "/org/asteroidos/ux/sleep-goal";
+const char ImperialUnitsKey[] = "/org/asteroidos/settings/imperial-units";
 const char PhoneProfileKey[] = "/org/asteroidos/btsyncd/phone-profile";
 const char PhoneStepsGoalKey[] = "/org/asteroidos/btsyncd/phone-steps-goal";
 const char PhoneSleepGoalKey[] = "/org/asteroidos/btsyncd/phone-sleep-goal";
+const char PhoneUnitsKey[] = "/org/asteroidos/btsyncd/phone-units";
 
 static double number(const QString &text)
 {
@@ -50,7 +52,8 @@ bool parse(const QByteArray &xml, Values *values, const QDate &today)
     while (reader.readNextStartElement()) {
         const QString name = reader.name().toString();
         if (name != QLatin1String("gd") && name != QLatin1String("hc") && name != QLatin1String("wk")
-            && name != QLatin1String("bd") && name != QLatin1String("sg") && name != QLatin1String("sl")) {
+            && name != QLatin1String("bd") && name != QLatin1String("sg") && name != QLatin1String("sl")
+            && name != QLatin1String("un")) {
             reader.skipCurrentElement();
             continue;
         }
@@ -73,6 +76,9 @@ bool parse(const QByteArray &xml, Values *values, const QDate &today)
             const QDate born = text.size() == 10 ? QDate::fromString(text, Qt::ISODate) : QDate();
             if (born.isValid() && born.year() >= 1900 && born < today)
                 v.birthDate = born;
+        } else if (name == QLatin1String("un")) {
+            if (text == QLatin1String("metric") || text == QLatin1String("imperial"))
+                v.units = text;
         } else if (name == QLatin1String("sg")) {
             const double steps = number(text);
             if (steps >= 1 && steps <= 100000 && steps == std::floor(steps))
@@ -152,6 +158,14 @@ int apply(const Values &values)
         written |= StepsGoal;
     if (applyGoal(SleepGoalKey, PhoneSleepGoalKey, values.sleepGoalMin))
         written |= SleepGoal;
+    if (!values.units.isEmpty()) {
+        MDConfItem phone(QString::fromLatin1(PhoneUnitsKey));
+        if (phone.value().toString() != values.units) {
+            store(ImperialUnitsKey, values.units == QLatin1String("imperial"));
+            phone.set(values.units);
+            written |= Units;
+        }
+    }
     return written;
 }
 

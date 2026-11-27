@@ -68,6 +68,14 @@
  *   /org/asteroidos/ux/sleep-goal              i  minutes a night
  * The AZM goal (150 a week) and the exercise days goal stay the watch's own:
  * Gadgetbridge has neither.
+ *
+ * The units (R5 E-35): stock's watch shows distances in the phone account's
+ * unit system, not the one of the watch's language. The phone sends its
+ * distance unit, <un>metric|imperial</un>; a fourth group, written when it
+ * differs from the one the phone sent last (PhoneUnitsKey), to
+ *   /org/asteroidos/settings/imperial-units    b  true: miles, false: km
+ * (unset: the apps take the locale's measurement system). Read by Exercise
+ * (ExerciseApp.qml) and the Health app; see R5-link NOTES for the others.
  */
 namespace HealthProfile {
 
@@ -77,10 +85,12 @@ extern const char WeightKey[];
 extern const char BirthDateKey[];
 extern const char StepsGoalKey[];
 extern const char SleepGoalKey[];
+extern const char ImperialUnitsKey[];
 // what the phone sent last: the profile's hash, the goals
 extern const char PhoneProfileKey[];
 extern const char PhoneStepsGoalKey[];
 extern const char PhoneSleepGoalKey[];
+extern const char PhoneUnitsKey[];
 
 // One <prof> message; what it does not carry (or carries out of range) is empty / 0
 struct Values {
@@ -90,12 +100,13 @@ struct Values {
     QDate birthDate;
     int stepsGoal = 0;
     int sleepGoalMin = 0;
+    QString units;      // metric, imperial; empty: not sent
 
     bool hasProfile() const { return !gender.isEmpty() || heightCm > 0 || weightKg > 0 || birthDate.isValid(); }
 };
 
 // The groups apply() wrote
-enum Group { None = 0, Profile = 1, StepsGoal = 2, SleepGoal = 4 };
+enum Group { None = 0, Profile = 1, StepsGoal = 2, SleepGoal = 4, Units = 8 };
 
 // Parses a <prof> message (false: not one, or not well-formed); today: the birth date must be before it
 bool parse(const QByteArray &xml, Values *values, const QDate &today = QDate::currentDate());

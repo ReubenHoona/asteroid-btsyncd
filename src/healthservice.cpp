@@ -406,10 +406,11 @@ int HealthService::profile(const QByteArray &xml)
     const auto state = [written](int group, bool sent) {
         return QLatin1String((written & group) ? "written" : sent ? "unchanged" : "not sent");
     };
-    qInfo().noquote() << QStringLiteral("Health profile from the phone: profile %1, steps goal %2, sleep goal %3")
+    qInfo().noquote() << QStringLiteral("Health profile from the phone: profile %1, steps goal %2, sleep goal %3, units %4")
                              .arg(state(HealthProfile::Profile, values.hasProfile()),
                                   state(HealthProfile::StepsGoal, values.stepsGoal > 0),
-                                  state(HealthProfile::SleepGoal, values.sleepGoalMin > 0));
+                                  state(HealthProfile::SleepGoal, values.sleepGoalMin > 0),
+                                  state(HealthProfile::Units, !values.units.isEmpty()));
     return written;
 }
 
