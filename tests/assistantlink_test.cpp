@@ -28,6 +28,8 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QFileInfo>
 #include <QFile>
 #include <QTemporaryDir>
@@ -308,7 +310,16 @@ int main(int argc, char **argv)
     // phone events: nav and cam come out as PhoneEvent(kind, json); other kinds, bad JSON and
     // a half event do not; one split over two writes and one after a status in the same write do
     collector.events.clear();
+    // R5 D-02: no state before an event of the kind came
+    CHECK(api(driver, "PhoneEventState", {QStringLiteral("nav")}).toString().isEmpty());
     writeReply(driver, "<pe><k>nav</k><js>{&quot;st&quot;:&quot;nav&quot;,&quot;ins&quot;:&quot;High St towards Blah&quot;,&quot;dm&quot;:91,&quot;pc&quot;:35}</js></pe>");
+    CHECK(waitFor([&] { return collector.events.size() == 1; }));
+    {
+        // the trip so far, with its age (whole seconds, 0 here)
+        const QJsonObject st = QJsonDocument::fromJson(api(driver, "PhoneEventState", {QStringLiteral("nav")}).toString().toUtf8()).object();
+        CHECK(st.value("st").toString() == "nav" && st.value("ins").toString() == "High St towards Blah"
+              && st.value("dm").toInt() == 91 && st.value("pc").toInt() == 35 && st.value("age").toInt() == 0);
+    }
     writeReply(driver, "<pe><k>cam</k><js>{&quot;ev&quot;:&quot;shot&quot;}</js></pe>");
     writeReply(driver, "<pe><k>weather</k><js>{&quot;x&quot;:1}</js></pe>");
     writeReply(driver, "<pe><k>nav</k><js>not json</js></pe>");
@@ -328,6 +339,22 @@ int main(int argc, char **argv)
     CHECK(collector.events.value(1) == qMakePair(QStringLiteral("cam"), QStringLiteral("{\"ev\":\"shot\"}")));
     CHECK(collector.events.value(2) == qMakePair(QStringLiteral("nav"), QStringLiteral("{\"st\":\"end\"}")));
     CHECK(collector.events.value(3) == qMakePair(QStringLiteral("cam"), QStringLiteral("{\"ev\":\"closed\"}")));
+    // R5 D-02: the last of each kind (the trip ended, the camera closed); a kind not taken has none
+    CHECK(api(driver, "PhoneEventState", {QStringLiteral("nav")}).toString() == QLatin1String("{\"age\":0,\"st\":\"end\"}"));
+    CHECK(api(driver, "PhoneEventState", {QStringLiteral("cam")}).toString() == QLatin1String("{\"age\":0,\"ev\":\"closed\"}"));
+    CHECK(api(driver, "PhoneEventState", {QStringLiteral("weather")}).toString().isEmpty());
+    // a new trip while the phone stays: its first turn replaces the end
+    writeReply(driver, "<pe><k>nav</k><js>{&quot;st&quot;:&quot;nav&quot;,&quot;ins&quot;:&quot;Turn left onto Elm Way&quot;,&quot;act&quot;:&quot;left&quot;}</js></pe>");
+    CHECK(waitFor([&] { return collector.events.size() == 5; }));
+    CHECK(api(driver, "PhoneEventState", {QStringLiteral("nav")}).toString().contains("Elm Way"));
+    // the phone goes: what it had is not known any more
+    notifications.setLinkConnected(false);
+    spin(200);
+    CHECK(api(driver, "PhoneEventState", {QStringLiteral("nav")}).toString().isEmpty());
+    CHECK(api(driver, "PhoneEventState", {QStringLiteral("cam")}).toString().isEmpty());
+    notifications.setLinkConnected(true);
+    writeReply(driver, "<asr><st>ready</st><ac>nav,contacts,sms,call,hangup,convs,msgs,msend,mread,rsvp,open,wifipw,cam</ac></asr>");
+    CHECK(waitFor([&] { return api(driver, "Available").toBool(); }));
     CHECK(api(driver, "Actions").toStringList().size() == 13);
     collector.results.clear();
     // back to the three actions the rest of this test is about

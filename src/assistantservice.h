@@ -21,6 +21,7 @@
 #include <QByteArray>
 #include <QObject>
 #include <QHash>
+#include <QPair>
 #include <QSet>
 #include <QStringList>
 #include <QString>
@@ -90,6 +91,13 @@ private:
  * Signal PhoneEvent(s kind, s json): something the phone reports on its own
  * (assistantprotocol.h): kind nav (the next turn of a Google Maps
  * navigation, or {"st":"end"}) or cam (the camera remote's state).
+ *   PhoneEventState(s kind) -> s   the last PhoneEvent of that kind since the
+ *                          phone connected, with "age": the whole seconds since it
+ *                          came (wall clock, so the time asleep counts), or "" when
+ *                          none came (or the phone has gone since). An app that
+ *                          starts during a navigation (the Maps app's trip screen)
+ *                          reads where the trip is without waiting for the next
+ *                          turn. Kept in memory only, nothing is written.
  */
 class AssistantDBusApi : public QObject
 {
@@ -106,6 +114,7 @@ public slots:
     QStringList Actions();
     bool Act(uint id, const QString &json);
     bool CancelAct(uint id);
+    QString PhoneEventState(const QString &kind);
 
 signals:
     void Answer(uint id, const QString &text);
@@ -136,6 +145,8 @@ public:
     QStringList actions() const;
     bool act(uint id, const QByteArray &json);
     bool cancelAct(uint id);
+    // The last phone event of a kind with its age in seconds ("" for none; see PhoneEventState)
+    QString lastEvent(const QString &kind) const;
 
     // PhoneRelay: btsyncd's own acts with a callback (CallAudio's cvol, the weather refresh)
     bool relayHas(const QString &act) const override { return actions().contains(act); }
@@ -182,6 +193,8 @@ private:
     uint mRelayCounter = 0;
     MDConfItem *mWeatherRefresh = nullptr;
     bool mWeatherRefreshing = false;
+    // The last phone event of each kind (its JSON and when it came, ms since the epoch)
+    QHash<QString, QPair<QString, qint64>> mLastEvents;
 };
 
 #endif // ASSISTANTSERVICE_H

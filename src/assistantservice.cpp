@@ -25,6 +25,7 @@
 
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDebug>
@@ -157,6 +158,17 @@ bool AssistantDBusApi::Act(uint id, const QString &json)
     return id < AssistantService::InternalIdBase && mService->act(id, json.toUtf8());
 }
 bool AssistantDBusApi::CancelAct(uint id) { return mService->cancelAct(id); }
+QString AssistantDBusApi::PhoneEventState(const QString &kind) { return mService->lastEvent(kind); }
+
+QString AssistantService::lastEvent(const QString &kind) const
+{
+    const auto it = mLastEvents.constFind(kind);
+    if (it == mLastEvents.constEnd())
+        return QString();
+    QJsonObject o = QJsonDocument::fromJson(it.value().first.toUtf8()).object();
+    o.insert(QStringLiteral("age"), qMax<qint64>(0, (QDateTime::currentMSecsSinceEpoch() - it.value().second) / 1000));
+    return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
 
 AssistantService::AssistantService(int index, QDBusConnection bus, NotificationService *notifications, QObject *parent)
     : Service(bus, index, ASSISTANT_UUID, parent), mNotifications(notifications)
@@ -327,6 +339,7 @@ void AssistantService::onReply(const QByteArray &xml, int mtu)
             return;
         }
         qDebug() << "Assistant: phone event" << r.eventKind << r.eventJson.size() << "bytes";
+        mLastEvents.insert(r.eventKind, qMakePair(r.eventJson, QDateTime::currentMSecsSinceEpoch()));
         emit phoneEvent(r.eventKind, r.eventJson);
         return;
     }
@@ -403,6 +416,8 @@ void AssistantService::phoneGone(const char *why)
     const bool wasReady = mPhoneReady;
     mPhoneReady = false;
     mPhoneActions.clear();
+    // a trip or a camera the phone had is not known any more
+    mLastEvents.clear();
     // a list half sent comes again in full at the next connection; so does a reply cut short
     mNames.reset();
     mReply->drop("the phone is gone");
