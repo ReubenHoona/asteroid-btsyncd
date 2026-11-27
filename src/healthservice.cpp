@@ -17,6 +17,7 @@
 
 #include "healthservice.h"
 #include "healthchanges.h"
+#include "healthprofile.h"
 #include "healthrecords.h"
 #include "characteristic.h"
 #include "common.h"
@@ -34,9 +35,11 @@
 // hrr, every heart rate reading; hr one median per minute of them. Version 3:
 // wo workouts, wot their tracks, sl sleep sessions with their stages, rhr the
 // days' resting heart rates, from health.db by its change sequence; mb: the
-// most bytes of one answer of those)
+// most bytes of one answer of those; takes: what the phone may write besides
+// requests, prof the user's profile and goals, healthprofile.h)
 static const char HEALTH_CAPABILITIES[] =
-    "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types><mx>1000</mx><mb>8192</mb></health>";
+    "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types><mx>1000</mx><mb>8192</mb>"
+    "<takes>prof</takes></health>";
 
 // Requests are a few dozen bytes; anything longer without </req> is junk
 static const int MaxRequestSize = 1024;
@@ -73,14 +76,15 @@ static int minAccuracy()
  * Phone to watch: <req><ty>TYPE</ty><si>SINCE</si><mx>MAX</mx></req> (version
  * 3 also <sq>SEQ</sq> and <id>WORKOUT</id>), in as many writes as needed. A new request replaces an unanswered one; a request
  * that begins (at offset 0) while one is incomplete means the rest of that one
- * was lost, as does the phone going (drop()).
+ * was lost, as does the phone going (drop()). <prof>...</prof>, the profile
+ * and goals, is taken in without an answer (an unanswered request stays so).
  */
 class HealthRequestChrc : public Characteristic
 {
 public:
     HealthRequestChrc(QDBusConnection bus, unsigned int index, HealthService *service)
       : Characteristic(bus, index, HEALTH_REQ_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
-        mJoiner("Health request", {"req"}, MaxRequestSize) {}
+        mJoiner("Health request", {"req", "prof"}, MaxRequestSize) {}
 
     void drop(const char *why) { mJoiner.drop(why); }
 
@@ -91,8 +95,12 @@ public slots:
         const auto messages = mJoiner.add(value, MessageJoiner::offsetOf(options));
         if (mJoiner.overflowed())
             mService->request(QString(), 0, 0, mtu);
-        for (const auto &message : messages)
-            handle(message.second, mtu);
+        for (const auto &message : messages) {
+            if (message.first == "prof")
+                mService->profile(message.second);
+            else
+                handle(message.second, mtu);
+        }
     }
 
 private:
@@ -228,6 +236,25 @@ void HealthService::request(const QString &type, qint64 since, int max, int mtu,
         }
     }
     QTimer::singleShot(0, this, &HealthService::sendPending);
+}
+
+int HealthService::profile(const QByteArray &xml)
+{
+    HealthProfile::Values values;
+    if (!HealthProfile::parse(xml, &values)) {
+        qWarning() << "Bad health profile from the phone:" << xml.size() << "bytes";
+        return -1;
+    }
+    const int written = HealthProfile::apply(values);
+    // which groups changed, never their values
+    const auto state = [written](int group, bool sent) {
+        return QLatin1String((written & group) ? "written" : sent ? "unchanged" : "not sent");
+    };
+    qInfo().noquote() << QStringLiteral("Health profile from the phone: profile %1, steps goal %2, sleep goal %3")
+                             .arg(state(HealthProfile::Profile, values.hasProfile()),
+                                  state(HealthProfile::StepsGoal, values.stepsGoal > 0),
+                                  state(HealthProfile::SleepGoal, values.sleepGoalMin > 0));
+    return written;
 }
 
 void HealthService::sendPending()

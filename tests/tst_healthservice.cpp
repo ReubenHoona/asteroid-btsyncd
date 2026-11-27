@@ -109,9 +109,10 @@ private slots:
     void capabilities()
     {
         // version 2 (502eb0e): every heart rate reading as hrr, hr a median a minute; version 3 (M4 WO-09):
-        // workouts, their tracks, sleep and resting heart rate from health.db (tst_healthchanges)
+        // workouts, their tracks, sleep and resting heart rate from health.db (tst_healthchanges); takes prof
+        // (M4 WO-11): the phone may write the profile and goals (tst_healthprofile)
         const QByteArray caps = "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types><mx>1000</mx>"
-                                "<mb>8192</mb></health>";
+                                "<mb>8192</mb><takes>prof</takes></health>";
         QCOMPARE(mCaps->ReadValue({}), caps);
         QCOMPARE(mCaps->ReadValue({{"offset", 9}}), caps.mid(9));
         QCOMPARE(mCaps->ReadValue({{"offset", 0}}), caps);

@@ -169,6 +169,10 @@ btsyncd_test(timeservice_test DCONF SOURCES ${SRC}/timeservice.cpp ${SRC}/settim
 btsyncd_test(connectivity_test DCONF SOURCES ${SRC}/connectivityfeedback.cpp ${SRC}/wakehold.cpp
 	LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
 
+# M4 WO-11: Gadgetbridge's profile frames over D-Bus into a real dconf (cross: the image's mlite and dconf-service)
+btsyncd_test(healthprofile_test DCONF SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${SRC}/healthprofile.cpp ${GATT} LIBS Qt6::DBus PkgConfig::SQLITE3 ${MLITE})
+
 # FP-B2: the call log object (CR-08)
 btsyncd_test(calllog_test BUS SOURCES ${SRC}/calllog.cpp LIBS Qt6::DBus)
 
@@ -185,10 +189,15 @@ endif()
 set(FAKES common/fakepeers.cpp common/fakepeers.h common/testmain.h)
 btsyncd_test(tst_wakehold QTEST SOURCES ${SRC}/wakehold.cpp stubs/backgroundactivity.h)
 btsyncd_test(tst_healthservice QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${SRC}/healthprofile.cpp
 	${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
 # Version 3 of the health sync (workouts, tracks, sleep, resting heart rate from health.db) with Gadgetbridge's frames
 btsyncd_test(tst_healthchanges QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${SRC}/healthprofile.cpp
 	${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
+# The profile and goals from the phone (M4 WO-11): parsing, who wins, the request characteristic, Gadgetbridge's frames
+btsyncd_test(tst_healthprofile QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${SRC}/healthprofile.cpp ${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
 btsyncd_test(tst_notificationservice QTEST BUS SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
 btsyncd_test(tst_voiceservice QTEST BUS SOURCES ${SRC}/voiceservice.cpp ${SRC}/voicesource.cpp ${SRC}/voiceprotocol.cpp
 	${SRC}/voicecond.cpp ${NOTIF} ${FAKES} LIBS Qt6::DBus)

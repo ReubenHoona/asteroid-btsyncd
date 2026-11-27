@@ -352,7 +352,7 @@ private slots:
     void capabilities()
     {
         const QByteArray caps = "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types>"
-                                "<mx>1000</mx><mb>8192</mb></health>";
+                                "<mx>1000</mx><mb>8192</mb><takes>prof</takes></health>";
         QCOMPARE(mService->getCharacteristics()[2]->ReadValue({}), caps);
     }
 

@@ -1,0 +1,5 @@
+<prof><gd>female</gd><hc>168</hc><wk>61</wk><bd>1991-04-17</bd><sg>9000</sg><sl>450</sl></prof>
+<prof><gd>female</gd><hc>168</hc><wk>61</wk><bd>1991-04-17</bd><sg>9000</sg><sl>450</sl></prof>
+<prof><gd>female</gd><hc>168</hc><wk>63</wk><bd>1991-04-17</bd><sg>9000</sg><sl>450</sl></prof>
+<prof><hc>181</hc><sg>12000</sg></prof>
+<prof><gd>other</gd><hc>400</hc><wk>2000</wk><bd>2999-01-01</bd><sg>9000</sg><sl>30</sl></prof>

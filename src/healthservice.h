@@ -60,6 +60,8 @@ private:
  * (healthchanges.h): workouts, sleep sessions and resting heart rates by
  * health.db's change sequence, <req><ty>wo|sl|rhr</ty><sq>SEQ</sq></req>,
  * and a workout's track, <req><ty>wot</ty><id>ID</id><si>MS</si></req>.
+ * The phone also writes the user's profile and goals there,
+ * <prof>...</prof> (healthprofile.h), which has no answer.
  */
 class HealthRequestChrc;
 
@@ -73,6 +75,11 @@ public:
     // acknowledged before the data. seq: the sq of wo, sl, rhr; id: the
     // workout of wot (-1: none given)
     void request(const QString &type, qint64 since, int max, int mtu, qint64 seq = 0, qint64 id = -1);
+
+    // The phone's <prof> message: the profile and goals it changed go to
+    // dconf (HealthProfile::apply); returns the groups written, -1 if the
+    // message is no profile. Sends nothing.
+    int profile(const QByteArray &xml);
 
 public slots:
     // The phone's link (NotificationService::phoneConnectedChanged)
