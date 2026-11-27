@@ -1,0 +1,15 @@
+<req><ty>hr</ty><si>0</si></req>
+<req><ty>steps</ty><si>0</si></req>
+<req><ty>hrr</ty><si>0</si></req>
+<req><ty>wo</ty><sq>0</sq><mx>4</mx></req>
+<req><ty>wot</ty><id>2</id><si>0</si></req>
+<req><ty>wot</ty><id>2</id><si>1768029242000</si></req>
+<req><ty>wo</ty><sq>603</sq><mx>4</mx></req>
+<req><ty>sl</ty><sq>0</sq></req>
+<req><ty>rhr</ty><sq>0</sq></req>
+<req><ty>hr</ty><si>1768029000</si></req>
+<req><ty>steps</ty><si>0</si></req>
+<req><ty>hrr</ty><si>1768029055002</si></req>
+<req><ty>wo</ty><sq>627</sq><mx>4</mx></req>
+<req><ty>sl</ty><sq>623</sq></req>
+<req><ty>rhr</ty><sq>588</sq></req>

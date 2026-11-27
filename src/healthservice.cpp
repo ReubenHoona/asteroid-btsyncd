@@ -16,6 +16,7 @@
  */
 
 #include "healthservice.h"
+#include "healthchanges.h"
 #include "healthrecords.h"
 #include "characteristic.h"
 #include "common.h"
@@ -30,9 +31,12 @@
 #include <QXmlStreamReader>
 
 // What this watch can send, for the capabilities characteristic (version 2:
-// hrr, every heart rate reading; hr one median per minute of them)
+// hrr, every heart rate reading; hr one median per minute of them. Version 3:
+// wo workouts, wot their tracks, sl sleep sessions with their stages, rhr the
+// days' resting heart rates, from health.db by its change sequence; mb: the
+// most bytes of one answer of those)
 static const char HEALTH_CAPABILITIES[] =
-    "<health><version>2</version><types>hr,steps,hrr</types><mx>1000</mx></health>";
+    "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types><mx>1000</mx><mb>8192</mb></health>";
 
 // Requests are a few dozen bytes; anything longer without </req> is junk
 static const int MaxRequestSize = 1024;
@@ -66,8 +70,8 @@ static int minAccuracy()
 }
 
 /*
- * Phone to watch: <req><ty>TYPE</ty><si>SINCE</si><mx>MAX</mx></req>, in as
- * many writes as needed. A new request replaces an unanswered one; a request
+ * Phone to watch: <req><ty>TYPE</ty><si>SINCE</si><mx>MAX</mx></req> (version
+ * 3 also <sq>SEQ</sq> and <id>WORKOUT</id>), in as many writes as needed. A new request replaces an unanswered one; a request
  * that begins (at offset 0) while one is incomplete means the rest of that one
  * was lost, as does the phone going (drop()).
  */
@@ -96,7 +100,7 @@ private:
     {
         QXmlStreamReader reader(xml);
         QString type;
-        qint64 since = 0;
+        qint64 since = 0, seq = 0, id = -1;
         int max = 0;
         bool ok = reader.readNextStartElement() && reader.name() == QLatin1String("req");
         while (ok && reader.readNextStartElement()) {
@@ -106,6 +110,10 @@ private:
                 since = reader.readElementText().trimmed().toLongLong(&ok);
             else if (reader.name() == QLatin1String("mx"))
                 max = reader.readElementText().trimmed().toInt(&ok);
+            else if (reader.name() == QLatin1String("sq"))
+                seq = reader.readElementText().trimmed().toLongLong(&ok);
+            else if (reader.name() == QLatin1String("id"))
+                id = reader.readElementText().trimmed().toLongLong(&ok);
             else
                 reader.skipCurrentElement();
         }
@@ -114,7 +122,7 @@ private:
             mService->request(QString(), 0, 0, mtu);
             return;
         }
-        mService->request(type.isEmpty() ? QStringLiteral("?") : type, since, max, mtu);
+        mService->request(type.isEmpty() ? QStringLiteral("?") : type, since, max, mtu, seq, id);
     }
 
     HealthService *mService;
@@ -190,13 +198,24 @@ void HealthService::phoneConnectedChanged(bool connected)
         mRequest->drop("the phone is gone");
 }
 
-void HealthService::request(const QString &type, qint64 since, int max, int mtu)
+void HealthService::request(const QString &type, qint64 since, int max, int mtu, qint64 seq, qint64 id)
 {
     if (mtu > 0)
         mPendingMtu = mtu;
 
+    const HealthChanges::Kind kind = HealthChanges::kindFromName(type);
     if (type.isNull()) {
         mPending = HealthRecords::errorXml(QString(), QStringLiteral("request"));
+    } else if (kind == HealthChanges::WorkoutTrack) {
+        if (id < 0) {
+            mPending = HealthRecords::errorXml(type, QStringLiteral("request"));
+        } else {
+            mPending = HealthChanges::track(dataRoot(), id, since, max);
+            qDebug() << "Health request" << type << id << "since" << since << ":" << mPending.size() << "bytes";
+        }
+    } else if (kind != HealthChanges::None) {
+        mPending = HealthChanges::changes(dataRoot(), kind, seq, max);
+        qDebug() << "Health request" << type << "since seq" << seq << ":" << mPending.size() << "bytes";
     } else {
         const HealthRecords::Type t = HealthRecords::typeFromName(type);
         if (t == HealthRecords::Unknown) {

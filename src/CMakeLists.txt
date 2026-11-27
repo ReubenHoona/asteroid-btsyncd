@@ -22,6 +22,7 @@ set(
 	ancs.cpp
 	ancs_notification.cpp
 	cts.cpp
+	healthchanges.cpp
 	healthrecords.cpp
 	healthservice.cpp
 	voiceprotocol.cpp
@@ -64,6 +65,7 @@ set(
 	ancs.h
 	ancs_notification.h
 	cts.h
+	healthchanges.h
 	healthrecords.h
 	healthservice.h
 	voiceprotocol.h

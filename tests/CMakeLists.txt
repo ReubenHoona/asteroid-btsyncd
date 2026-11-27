@@ -184,8 +184,11 @@ endif()
 # private bus the system bus too (testmain.h)
 set(FAKES common/fakepeers.cpp common/fakepeers.h common/testmain.h)
 btsyncd_test(tst_wakehold QTEST SOURCES ${SRC}/wakehold.cpp stubs/backgroundactivity.h)
-btsyncd_test(tst_healthservice QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${GATT} ${FAKES}
-	LIBS Qt6::DBus PkgConfig::SQLITE3)
+btsyncd_test(tst_healthservice QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
+# Version 3 of the health sync (workouts, tracks, sleep, resting heart rate from health.db) with Gadgetbridge's frames
+btsyncd_test(tst_healthchanges QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
 btsyncd_test(tst_notificationservice QTEST BUS SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
 btsyncd_test(tst_voiceservice QTEST BUS SOURCES ${SRC}/voiceservice.cpp ${SRC}/voicesource.cpp ${SRC}/voiceprotocol.cpp
 	${SRC}/voicecond.cpp ${NOTIF} ${FAKES} LIBS Qt6::DBus)

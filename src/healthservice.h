@@ -56,7 +56,10 @@ private:
  * Heart rate and step history from asteroid-sensorlogd (see
  * PROTOCOL-health-sync.md). The phone writes
  *   <req><ty>hr|steps|hrr</ty><si>SINCE</si><mx>MAX</mx></req>
- * and gets the records after SINCE on the data characteristic.
+ * and gets the records after SINCE on the data characteristic. Version 3
+ * (healthchanges.h): workouts, sleep sessions and resting heart rates by
+ * health.db's change sequence, <req><ty>wo|sl|rhr</ty><sq>SEQ</sq></req>,
+ * and a workout's track, <req><ty>wot</ty><id>ID</id><si>MS</si></req>.
  */
 class HealthRequestChrc;
 
@@ -67,8 +70,9 @@ public:
     explicit HealthService(int index, QDBusConnection bus, QObject *parent = 0);
 
     // Answers after the write returns, so the phone sees its write
-    // acknowledged before the data
-    void request(const QString &type, qint64 since, int max, int mtu);
+    // acknowledged before the data. seq: the sq of wo, sl, rhr; id: the
+    // workout of wot (-1: none given)
+    void request(const QString &type, qint64 since, int max, int mtu, qint64 seq = 0, qint64 id = -1);
 
 public slots:
     // The phone's link (NotificationService::phoneConnectedChanged)

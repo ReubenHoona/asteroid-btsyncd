@@ -66,6 +66,7 @@ of the daemon is linked). ctest runs each one through `testenv.sh`:
 | weather_test, calendar_test, media_test, screenshot_test, battery_test, heartrate_test | the other services (calendar_test and media_test only with mkcal / AmberMpris) |
 | tst_voiceservice, voice_test, voicelocal_test, voicelink_test | voice replies: the phone's recogniser, the watch's, the link |
 | tst_healthservice, healthrecords_test | the health sync |
+| tst_healthchanges | the health sync's version 3 (M4 WO-09): workouts with laps, pauses and tracks, sleep stages, resting heart rate from sensorlogd's health.db by its change sequence; Gadgetbridge's sync byte for byte (fixtures/health-v3-*.frames.txt from fixtures/health-v3.sql and heartrate-v3.sql; `FIXTURES_WRITE=1` writes the frames again), paging, the 8192-byte answers, tombstones, a workout still on, restarts, a database made again |
 | tst_bluezmanager, advert_test | registration with BlueZ, advertising, the connection |
 | tst_wakehold, connectivity_test | the keepalive hold; vibrate on connectivity change (CR-26) |
 
