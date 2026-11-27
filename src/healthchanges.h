@@ -32,7 +32,7 @@
  * "the rows changed after sq N" and keeps the sq of the last answer.
  *
  * Requests (the phone's <req>, as for hr/steps/hrr):
- *   <req><ty>wo|sl|rhr</ty><sq>N</sq>[<mx>MAX</mx>]</req>
+ *   <req><ty>wo|sl|rhr|dly</ty><sq>N</sq>[<mx>MAX</mx>]</req>
  *   <req><ty>wot</ty><id>WORKOUT</id><si>T_MS</si>[<mx>MAX</mx>]</req>
  * Answers, each at most MaxAnswerBytes (one page; the phone asks again while
  * mo is 1):
@@ -55,6 +55,10 @@
  *     the first from st; stage 0 awake, 1 light, 2 deep, 3 REM; ns: the spans)
  *   <s sq id wd st en mn dl="1"/>                   a session replaced or deleted
  *   <d sq dt [rh]/>                                 a day (local ISO date) and its resting heart rate
+ *   <d sq dt st kc dm fl az hm rh tv/>              dly (R5 E-20): a day's totals, as the Health app
+ *     shows them: steps, energy burned (kcal), distance (m), floors, Active Zone
+ *     Minutes, hours with 250 steps, resting heart rate, the night's skin
+ *     temperature variation (°C); a day's row changes until the day is over
  * POINTS: dt,dlat,dlon,dalt,hacc,speed; ... dt from the point before (the
  * first from t0, so 0), lat/lon (1e-7 degrees) and altitude (dm) from the
  * point before that has one (the first from 0), hacc (dm) and speed (cm/s) as
@@ -62,7 +66,7 @@
  */
 namespace HealthChanges {
 
-enum Kind { None, Workouts, WorkoutTrack, Sleep, RestingHeartRate };
+enum Kind { None, Workouts, WorkoutTrack, Sleep, RestingHeartRate, DailyTotals };
 
 // The most bytes of one answer of these kinds: what the phone joins of a
 // relay reply (8192, Gadgetbridge's MAX_REPLY_WIRE_BYTES), so a page cut by
@@ -75,7 +79,7 @@ const int MaxRecords = 1000;
 Kind kindFromName(const QString &name);
 QByteArray kindName(Kind kind);
 
-// wo, sl, rhr: the rows changed after sinceSeq, oldest change first, at most max and maxBytes
+// wo, sl, rhr, dly: the rows changed after sinceSeq, oldest change first, at most max and maxBytes
 QByteArray changes(const QString &root, Kind kind, qint64 sinceSeq, int max = MaxRecords,
                    int maxBytes = MaxAnswerBytes);
 

@@ -39,11 +39,12 @@
 // hrr, every heart rate reading; hr one median per minute of them. Version 3:
 // wo workouts, wot their tracks, sl sleep sessions with their stages, rhr the
 // days' resting heart rates, from health.db by its change sequence; mb: the
-// most bytes of one answer of those; takes: what the phone may write besides
+// most bytes of one answer of those; R5 E-19 temp the skin temperature
+// readings, E-20 dly the days' totals (healthrecords.h, healthchanges.h); takes: what the phone may write besides
 // requests, prof the user's profile and goals, healthprofile.h, synced the end
 // of a sync, healthservice.h)
 static const char HEALTH_CAPABILITIES[] =
-    "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types><mx>1000</mx><mb>8192</mb>"
+    "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr,temp,dly</types><mx>1000</mx><mb>8192</mb>"
     "<takes>prof,synced</takes></health>";
 
 // Requests are a few dozen bytes; anything longer without </req> is junk

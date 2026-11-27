@@ -200,6 +200,9 @@ btsyncd_test(tst_healthchanges QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}
 # The profile and goals from the phone (M4 WO-11): parsing, who wins, the request characteristic, Gadgetbridge's frames
 btsyncd_test(tst_healthprofile QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
 	${SRC}/healthprofile.cpp ${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
+# R5 E-19, E-20: the types temp (skin temperature) and dly (the days' totals), Gadgetbridge's frames
+btsyncd_test(tst_healthtypes QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${SRC}/healthprofile.cpp ${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
 # R5 E-08: the syncs the watch starts (a fake relay, health.db events, sensorlogd's signal, Gadgetbridge's <synced>)
 btsyncd_test(tst_healthsync QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
 	${SRC}/healthprofile.cpp ${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)

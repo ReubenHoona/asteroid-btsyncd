@@ -112,7 +112,7 @@ private slots:
         // workouts, their tracks, sleep and resting heart rate from health.db (tst_healthchanges); takes prof
         // (M4 WO-11): the phone may write the profile and goals (tst_healthprofile); and synced (R5 E-08): the end of a
         // sync (tst_healthsync)
-        const QByteArray caps = "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types><mx>1000</mx>"
+        const QByteArray caps = "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr,temp,dly</types><mx>1000</mx>"
                                 "<mb>8192</mb><takes>prof,synced</takes></health>";
         QCOMPARE(mCaps->ReadValue({}), caps);
         QCOMPARE(mCaps->ReadValue({{"offset", 9}}), caps.mid(9));
