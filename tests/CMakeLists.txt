@@ -166,6 +166,8 @@ btsyncd_test(heartrate_test DCONF SOURCES ${SRC}/heartrateservice.cpp ${GATT} LI
 
 # FP-B1: the phone's time against Settings > Date & time (a fake timedate1); vibrate on connectivity change
 btsyncd_test(timeservice_test DCONF SOURCES ${SRC}/timeservice.cpp ${SRC}/settime.cpp ${GATT} LIBS Qt6::DBus ${MLITE})
+# R5 E-07: the phone's time zone with its time (Gadgetbridge's frames, a fake timedate1)
+btsyncd_test(timezone_test DCONF SOURCES ${SRC}/timeservice.cpp ${SRC}/settime.cpp ${GATT} LIBS Qt6::DBus ${MLITE})
 btsyncd_test(connectivity_test DCONF SOURCES ${SRC}/connectivityfeedback.cpp ${SRC}/wakehold.cpp
 	LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
 
