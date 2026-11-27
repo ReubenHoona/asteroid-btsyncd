@@ -252,6 +252,9 @@ const char SLEEP_SQL[] =
     "SELECT seq, id, wake_date, start_ms, end_ms, main, deleted, asleep_min, awake_min, rem_min, light_min, "
     "deep_min, score, goal_min, avg_hr, algo FROM sleep_session WHERE seq > ? ORDER BY seq";
 const char DAILY_SQL[] = "SELECT seq, date, resting_hr FROM daily WHERE seq > ? ORDER BY seq";
+const char DAILY_TOTALS_SQL[] =
+    "SELECT seq, date, steps, kcal, distance_m, floors, azm, hours_met, resting_hr, temp_dev_c FROM daily "
+    "WHERE seq > ? ORDER BY seq";
 
 // what a record needs besides its row, prepared once an answer
 struct Children {
@@ -379,6 +382,25 @@ bool dayRecord(const Stmt &q, Record *r)
     return true;
 }
 
+// A day's totals (DAILY_TOTALS_SQL)
+bool dayTotalsRecord(const Stmt &q, Record *r)
+{
+    r->tag = "d";
+    Attrs a(q);
+    a.integer("sq", 0);
+    a.text("dt", 1);
+    a.integer("st", 2);
+    a.real("kc", 3);
+    a.real("dm", 4);
+    a.integer("fl", 5);
+    a.integer("az", 6);
+    a.integer("hm", 7);
+    a.integer("rh", 8);
+    a.real("tv", 9);
+    r->attrs = a.out;
+    return true;
+}
+
 QByteArray dbError(const QByteArray &ty)
 {
     return HealthRecords::errorXml(QString::fromLatin1(ty), QStringLiteral("db"));
@@ -396,6 +418,8 @@ Kind kindFromName(const QString &name)
         return Sleep;
     if (name == QLatin1String("rhr"))
         return RestingHeartRate;
+    if (name == QLatin1String("dly"))
+        return DailyTotals;
     return None;
 }
 
@@ -406,6 +430,7 @@ QByteArray kindName(Kind kind)
     case WorkoutTrack: return "wot";
     case Sleep: return "sl";
     case RestingHeartRate: return "rhr";
+    case DailyTotals: return "dly";
     default: return QByteArray();
     }
 }
@@ -414,7 +439,7 @@ QByteArray changes(const QString &root, Kind kind, qint64 sinceSeq, int max, int
 {
     const QByteArray ty = kindName(kind);
     const char *sql = kind == Workouts ? WORKOUT_SQL : kind == Sleep ? SLEEP_SQL
-            : kind == RestingHeartRate ? DAILY_SQL : nullptr;
+            : kind == RestingHeartRate ? DAILY_SQL : kind == DailyTotals ? DAILY_TOTALS_SQL : nullptr;
     if (!sql)
         return HealthRecords::errorXml(QString::fromLatin1(ty), QStringLiteral("type"));
     if (max <= 0 || max > MaxRecords)
@@ -453,7 +478,8 @@ QByteArray changes(const QString &root, Kind kind, qint64 sinceSeq, int max, int
             }
             Record r;
             const bool read = kind == Workouts ? workoutRecord(q, children, &r)
-                    : kind == Sleep ? sleepRecord(q, children, &r) : dayRecord(q, &r);
+                    : kind == Sleep ? sleepRecord(q, children, &r)
+                    : kind == DailyTotals ? dayTotalsRecord(q, &r) : dayRecord(q, &r);
             if (!read)
                 return dbError(ty);
             const QByteArray xml = r.fit(room - records.size(), n == 0);
@@ -544,6 +570,23 @@ QByteArray track(const QString &root, qint64 workoutId, qint64 sinceMs, int max,
     if (n)
         xml += "<r>" + points + "</r>";
     return xml + "</data>";
+}
+
+SyncMarks syncMarks(const QString &root)
+{
+    SyncMarks marks;
+    Db db(root);
+    if (!db.exists() || !db.db())
+        return marks;
+    // the primary key and the wake date index: two short reads
+    Stmt w(db.db(), "SELECT MAX(id) FROM workout WHERE end_ms IS NOT NULL AND deleted = 0");
+    if (w.row() && !w.null(0))
+        marks.workoutId = w.i(0);
+    Stmt s(db.db(), "SELECT MAX(wake_date) FROM sleep_session WHERE main = 1 AND deleted = 0");
+    if (s.row() && !s.null(0))
+        marks.wakeDate = QString::fromUtf8(s.text(0));
+    marks.valid = !w.failed() && !s.failed();
+    return marks;
 }
 
 }

@@ -22,10 +22,14 @@
 #include "characteristic.h"
 #include "common.h"
 #include "messagejoiner.h"
+#include "phonerelay.h"
 
 #include <MDConfItem>
 #include <QDBusMessage>
+#include <QDateTime>
 #include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
@@ -35,11 +39,13 @@
 // hrr, every heart rate reading; hr one median per minute of them. Version 3:
 // wo workouts, wot their tracks, sl sleep sessions with their stages, rhr the
 // days' resting heart rates, from health.db by its change sequence; mb: the
-// most bytes of one answer of those; takes: what the phone may write besides
-// requests, prof the user's profile and goals, healthprofile.h)
+// most bytes of one answer of those; R5 E-19 temp the skin temperature
+// readings, E-20 dly the days' totals (healthrecords.h, healthchanges.h); takes: what the phone may write besides
+// requests, prof the user's profile and goals, healthprofile.h, synced the end
+// of a sync, healthservice.h)
 static const char HEALTH_CAPABILITIES[] =
-    "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types><mx>1000</mx><mb>8192</mb>"
-    "<takes>prof</takes></health>";
+    "<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr,temp,dly</types><mx>1000</mx><mb>8192</mb>"
+    "<takes>prof,synced</takes></health>";
 
 // Requests are a few dozen bytes; anything longer without </req> is junk
 static const int MaxRequestSize = 1024;
@@ -77,14 +83,15 @@ static int minAccuracy()
  * 3 also <sq>SEQ</sq> and <id>WORKOUT</id>), in as many writes as needed. A new request replaces an unanswered one; a request
  * that begins (at offset 0) while one is incomplete means the rest of that one
  * was lost, as does the phone going (drop()). <prof>...</prof>, the profile
- * and goals, is taken in without an answer (an unanswered request stays so).
+ * and goals, and <synced>...</synced>, the end of a sync, are taken in
+ * without an answer (an unanswered request stays so).
  */
 class HealthRequestChrc : public Characteristic
 {
 public:
     HealthRequestChrc(QDBusConnection bus, unsigned int index, HealthService *service)
       : Characteristic(bus, index, HEALTH_REQ_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
-        mJoiner("Health request", {"req", "prof"}, MaxRequestSize) {}
+        mJoiner("Health request", {"req", "prof", "synced"}, MaxRequestSize) {}
 
     void drop(const char *why) { mJoiner.drop(why); }
 
@@ -98,6 +105,8 @@ public slots:
         for (const auto &message : messages) {
             if (message.first == "prof")
                 mService->profile(message.second);
+            else if (message.first == "synced")
+                mService->synced(message.second);
             else
                 handle(message.second, mtu);
         }
@@ -197,13 +206,161 @@ HealthService::HealthService(int index, QDBusConnection bus, QObject *parent) : 
     addCharacteristic(mRequest);
     addCharacteristic(mData);
     addCharacteristic(new HealthCapabilitiesChrc(bus, 2, this));
+
+    mSyncRequest = new MDConfItem(QString::fromLatin1(SyncRequestKey), this);
+    mSyncState = new MDConfItem(QString::fromLatin1(SyncStateKey), this);
+    mSyncLast = new MDConfItem(QString::fromLatin1(SyncLastKey), this);
+    mSyncSupported = new MDConfItem(QString::fromLatin1(SyncSupportedKey), this);
+    // the Health app's Today list and its Sync button: a change of the key, no polling
+    connect(mSyncRequest, &MDConfItem::valueChanged, this, &HealthService::onSyncRequest);
+    mSyncTimeout.setSingleShot(true);
+    mSyncTimeout.setInterval(SyncTimeoutMs);
+    connect(&mSyncTimeout, &QTimer::timeout, this, &HealthService::onSyncTimeout);
+    // a sync that waited when btsyncd last stopped does not end any more
+    if (mSyncState->value().toString() == QLatin1String("syncing"))
+        setSyncState("idle");
+    // what health.db has now; the workouts and nights after it start a sync
+    mMarks = HealthChanges::syncMarks(dataRoot());
+    QDBusConnection::sessionBus().connect(QStringLiteral("org.asteroid.sensorlogd.logger"),
+                                          QStringLiteral("/org/asteroid/sensorlogd/logger"),
+                                          QStringLiteral("org.asteroid.sensorlogd.logger"), QStringLiteral("HealthChanged"),
+                                          this, SLOT(healthChanged(qlonglong)));
 }
 
 void HealthService::phoneConnectedChanged(bool connected)
 {
     // a request cut by the disconnection never ends: the phone asks again when it is back
-    if (!connected)
+    if (!connected) {
         mRequest->drop("the phone is gone");
+        if (mSyncing) {
+            mSyncing = false;
+            mSyncTimeout.stop();
+            setSyncState("failed");
+        }
+    }
+}
+
+void HealthService::healthChanged(qlonglong)
+{
+    const HealthChanges::SyncMarks now = HealthChanges::syncMarks(dataRoot());
+    if (!now.valid)
+        return;
+    const HealthChanges::SyncMarks before = mMarks;
+    mMarks = now;
+    // health.db made after btsyncd started: what it has first is no event
+    if (!before.valid)
+        return;
+    if (now.workoutId > before.workoutId)
+        requestSync(QStringLiteral("wo"));
+    else if (now.wakeDate > before.wakeDate)
+        requestSync(QStringLiteral("sl"));
+}
+
+void HealthService::onSyncRequest()
+{
+    // "today@MS" or "button@MS": the time makes every press a change of the key
+    const QString value = mSyncRequest->value().toString();
+    const QString event = value.section(QLatin1Char('@'), 0, 0);
+    if (event == QLatin1String("today") || event == QLatin1String("button"))
+        requestSync(event);
+}
+
+bool HealthService::requestSync(const QString &event)
+{
+    const bool button = event == QLatin1String("button");
+    if (mSyncing) {
+        qInfo() << "Health sync: the one the watch asked for still runs;" << event << "not asked for";
+        return false;
+    }
+    if (!mRelay || !mRelay->relayHas(QStringLiteral("hsync"))) {
+        // no phone that does it: the button says so (stock "Can't Sync Data", Retry)
+        if (button)
+            setSyncState("failed");
+        return false;
+    }
+    if (!button) {
+        const qint64 last = mSyncLast->value(0).toLongLong();
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (last > 0 && now >= last && now - last < SyncQuietMs)
+            return false;
+    }
+    QJsonObject act;
+    act.insert(QStringLiteral("a"), QStringLiteral("hsync"));
+    act.insert(QStringLiteral("ev"), event);
+    const bool sent = mRelay->relayAct(QJsonDocument(act).toJson(QJsonDocument::Compact), [this](const QString &json) {
+        const QJsonObject r = QJsonDocument::fromJson(json.toUtf8()).object();
+        if (r.value(QStringLiteral("ok")).toBool())
+            return;     // it runs: <synced> ends it
+        qInfo() << "Health sync: the phone did not start one:" << r.value(QStringLiteral("er")).toString();
+        if (mSyncing) {
+            mSyncing = false;
+            mSyncTimeout.stop();
+            setSyncState("failed");
+        }
+    });
+    if (!sent) {
+        if (button)
+            setSyncState("failed");
+        return false;
+    }
+    mSyncing = true;
+    mSyncTimeout.start();
+    setSyncState("syncing");
+    qInfo() << "Health sync asked for:" << event;
+    return true;
+}
+
+bool HealthService::synced(const QByteArray &xml)
+{
+    QXmlStreamReader reader(xml);
+    if (!reader.readNextStartElement() || reader.name() != QLatin1String("synced"))
+        return false;
+    bool ok = false, okSeen = false;
+    qint64 n = -1;
+    while (reader.readNextStartElement()) {
+        if (reader.name() == QLatin1String("ok")) {
+            ok = reader.readElementText().trimmed() == QLatin1String("1");
+            okSeen = true;
+        } else if (reader.name() == QLatin1String("n")) {
+            n = reader.readElementText().trimmed().toLongLong();
+        } else {
+            reader.skipCurrentElement();
+        }
+    }
+    if (reader.hasError() || !okSeen) {
+        qWarning() << "Bad end of a health sync from the phone:" << xml.size() << "bytes";
+        return false;
+    }
+    if (!mSyncSupported->value(false).toBool())
+        mSyncSupported->set(true);
+    const bool asked = mSyncing;
+    mSyncing = false;
+    mSyncTimeout.stop();
+    if (ok) {
+        mSyncLast->set(QDateTime::currentMSecsSinceEpoch());
+        setSyncState("idle");
+    } else {
+        setSyncState("failed");
+    }
+    qInfo().noquote() << QStringLiteral("Health sync ended %1, %2 records%3").arg(ok ? "in full" : "early")
+                         .arg(n).arg(asked ? " (the watch asked for it)" : "");
+    return true;
+}
+
+void HealthService::onSyncTimeout()
+{
+    if (!mSyncing)
+        return;
+    qInfo() << "Health sync: the phone did not end the one the watch asked for";
+    mSyncing = false;
+    setSyncState("failed");
+}
+
+void HealthService::setSyncState(const char *state)
+{
+    const QString s = QString::fromLatin1(state);
+    if (mSyncState->value().toString() != s)
+        mSyncState->set(s);
 }
 
 void HealthService::request(const QString &type, qint64 since, int max, int mtu, qint64 seq, qint64 id)
@@ -250,10 +407,11 @@ int HealthService::profile(const QByteArray &xml)
     const auto state = [written](int group, bool sent) {
         return QLatin1String((written & group) ? "written" : sent ? "unchanged" : "not sent");
     };
-    qInfo().noquote() << QStringLiteral("Health profile from the phone: profile %1, steps goal %2, sleep goal %3")
+    qInfo().noquote() << QStringLiteral("Health profile from the phone: profile %1, steps goal %2, sleep goal %3, units %4")
                              .arg(state(HealthProfile::Profile, values.hasProfile()),
                                   state(HealthProfile::StepsGoal, values.stepsGoal > 0),
-                                  state(HealthProfile::SleepGoal, values.sleepGoalMin > 0));
+                                  state(HealthProfile::SleepGoal, values.sleepGoalMin > 0),
+                                  state(HealthProfile::Units, !values.units.isEmpty()));
     return written;
 }
 

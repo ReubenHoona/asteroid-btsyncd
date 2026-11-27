@@ -1,1 +1,1 @@
-<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr</types><mx>1000</mx><mb>8192</mb><takes>prof</takes></health>
+<health><version>3</version><types>hr,steps,hrr,wo,wot,sl,rhr,temp,dly</types><mx>1000</mx><mb>8192</mb><takes>prof,synced</takes></health>

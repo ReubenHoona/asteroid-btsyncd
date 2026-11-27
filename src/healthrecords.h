@@ -43,14 +43,18 @@
  * - steps: the steps taken since the record before (deltas).
  * Usable: accuracy at least sensorlogd's heartrateSensor/minStatus, the
  * readings sensorlogd's own records use.
+ * - temp (R5 E-19): the skin temperature health.db keeps, skin_temp (t_ms, c:
+ *   a minute's reading during the night, M4 WO-13); times in milliseconds,
+ *   values in hundredths of a degree Celsius (3412: 34.12 °C); readings
+ *   outside 0 to 60 °C are left out.
  */
 namespace HealthRecords {
 
-enum Type { Unknown, HeartRate, Steps, HeartRateReadings };
+enum Type { Unknown, HeartRate, Steps, HeartRateReadings, SkinTemperature };
 
 struct Record {
-    qint64 time;    // epoch seconds (hrr: milliseconds)
-    qint64 value;   // bpm, or steps since the record before
+    qint64 time;    // epoch seconds (hrr, temp: milliseconds)
+    qint64 value;   // bpm, steps since the record before, or (temp) hundredths of a degree
 };
 
 struct Page {

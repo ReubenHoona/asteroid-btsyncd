@@ -1,0 +1,2 @@
+<synced><ok>1</ok><n>42</n></synced>
+<synced><ok>0</ok><n>3</n></synced>

@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 
 namespace HealthRecords {
 
@@ -55,9 +56,10 @@ QString sensorDir(Type type)
 class ReadingsDb
 {
 public:
-    explicit ReadingsDb(const QString &root)
+    // heartrate.db, or (temp) health.db
+    explicit ReadingsDb(const QString &root, const char *file = "heartrate.db")
     {
-        const QString path = root + QStringLiteral("heartrate.db");
+        const QString path = root + QLatin1String(file);
         if (!QFile::exists(path))
             return;
         if (sqlite3_open_v2(QFile::encodeName(path).constData(), &m_db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
@@ -180,6 +182,29 @@ Page queryReadings(const QString &root, qint64 since, int max, int minAccuracy)
     return page;
 }
 
+// temp: the skin temperature readings after since (epoch ms), at most max; more if there are others
+Page querySkinTemperature(const QString &root, qint64 since, int max)
+{
+    Page page;
+    ReadingsDb db(root, "health.db");
+    sqlite3_stmt *st = db.prepare("SELECT t_ms, c FROM skin_temp WHERE t_ms > ? AND c > 0 AND c < 60 "
+                                  "ORDER BY t_ms LIMIT ?");
+    if (!st)
+        return page;
+    sqlite3_bind_int64(st, 1, since);
+    sqlite3_bind_int(st, 2, max + 1);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        if (page.records.size() == max) {
+            page.more = true; // the times are the table's key
+            break;
+        }
+        page.records.append({sqlite3_column_int64(st, 0), qint64(std::llround(sqlite3_column_double(st, 1) * 100.0))});
+    }
+    if (!page.records.isEmpty())
+        page.t0 = page.records.first().time;
+    return page;
+}
+
 /*
  * One day's file. Steps become the steps taken since the record before
  * that day (the first record: since midnight). A value below the one
@@ -228,6 +253,8 @@ Type typeFromName(const QString &name)
         return Steps;
     if (name == QLatin1String("hrr"))
         return HeartRateReadings;
+    if (name == QLatin1String("temp"))
+        return SkinTemperature;
     return Unknown;
 }
 
@@ -237,6 +264,7 @@ QString typeName(Type type)
     case HeartRate: return QStringLiteral("hr");
     case Steps:     return QStringLiteral("steps");
     case HeartRateReadings: return QStringLiteral("hrr");
+    case SkinTemperature: return QStringLiteral("temp");
     default:        return QString();
     }
 }
@@ -250,6 +278,8 @@ Page query(const QString &root, Type type, qint64 since, int max, int minAccurac
         max = MaxRecords;
     if (type == HeartRateReadings)
         return queryReadings(root, since, max, minAccuracy);
+    if (type == SkinTemperature)
+        return querySkinTemperature(root, since, max);
 
     // The day before since's too: its 23:59:59 record, or a time zone change
     const QDate first = QDateTime::fromSecsSinceEpoch(qMax<qint64>(since, 0)).date().addDays(-1);

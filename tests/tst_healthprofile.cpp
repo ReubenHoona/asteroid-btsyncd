@@ -384,7 +384,7 @@ private slots:
     void capabilitiesFixture()
     {
         const QByteArray caps = mCaps->ReadValue({});
-        QVERIFY(caps.contains("<takes>prof</takes>"));
+        QVERIFY(caps.contains("<takes>prof,synced</takes>"));
         if (qEnvironmentVariableIntValue("FIXTURES_WRITE") == 1) {
             QFile f(QStringLiteral(FIXTURE_DIR "/health-capabilities.frames.txt"));
             QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
@@ -422,6 +422,51 @@ private slots:
         // 5: values the watch does not take (height, weight, a birth date to come, a 30-minute sleep goal)
         writeInPieces(frames[4], 20);
         expectWatch("other", 181, 63.0, "1991-04-17", 9000, 450);
+        QTest::qWait(20);
+        QVERIFY(mChunks.isEmpty());
+    }
+
+    /* R5 E-35: the units */
+
+    void units()
+    {
+        QCOMPARE(QByteArray(ImperialUnitsKey), QByteArray("/org/asteroidos/settings/imperial-units"));
+        QCOMPARE(parsed("<prof><un>imperial</un></prof>").units, QStringLiteral("imperial"));
+        QCOMPARE(parsed("<prof><un> metric </un><gd>male</gd></prof>").units, QStringLiteral("metric"));
+        // anything else is no unit; the units alone are no profile
+        QVERIFY(parsed("<prof><un>Imperial</un></prof>").units.isEmpty());
+        QVERIFY(parsed("<prof><un>us</un></prof>").units.isEmpty());
+        QVERIFY(!parsed("<prof><un>metric</un></prof>").hasProfile());
+        // a phone without them (Gadgetbridge before R5 E-35): the key stays unset, the apps take the locale's
+        QCOMPARE(apply(parsed("<prof><gd>female</gd></prof>")) & Units, 0);
+        QVERIFY(!key(ImperialUnitsKey).isValid());
+        QCOMPARE(apply(parsed("<prof><un>imperial</un></prof>")), int(Units));
+        QCOMPARE(key(ImperialUnitsKey).toBool(), true);
+        QCOMPARE(key(PhoneUnitsKey).toString(), QStringLiteral("imperial"));
+        QCOMPARE(apply(parsed("<prof><un>imperial</un></prof>")), int(None));
+        QCOMPARE(apply(parsed("<prof><un>metric</un></prof>")), int(Units));
+        QCOMPARE(key(ImperialUnitsKey).toBool(), false);
+    }
+
+    // Gadgetbridge's unit frames (its AsteroidOSProfileTest: About you never filled, then a height entered)
+    void unitFrames()
+    {
+        const QList<QByteArray> frames = fixtureFrames("health-profile-units.frames.txt");
+        QCOMPARE(frames.size(), 3);
+        watchOwnValues();
+        // 1: the placeholders of About you's screen are not sent: the watch's profile stays, the units are written
+        writeInPieces(frames[0], 20);
+        expectWatch("male", 175, 75.0, QString(), 10000, QVariant());
+        QCOMPARE(key(ImperialUnitsKey).toBool(), true);
+        // the watch's own setting (no Settings row writes it today; an override) stays while the phone's is the same
+        setKey(ImperialUnitsKey, false);
+        writeInPieces(frames[1], 20);
+        QCOMPARE(key(ImperialUnitsKey).toBool(), false);
+        // 3: metric and a height: both written
+        setKey(ImperialUnitsKey, true);
+        writeInPieces(frames[2], 20);
+        QCOMPARE(key(ImperialUnitsKey).toBool(), false);
+        expectWatch("male", 176, 75.0, QString(), 10000, QVariant());
         QTest::qWait(20);
         QVERIFY(mChunks.isEmpty());
     }

@@ -166,6 +166,8 @@ btsyncd_test(heartrate_test DCONF SOURCES ${SRC}/heartrateservice.cpp ${GATT} LI
 
 # FP-B1: the phone's time against Settings > Date & time (a fake timedate1); vibrate on connectivity change
 btsyncd_test(timeservice_test DCONF SOURCES ${SRC}/timeservice.cpp ${SRC}/settime.cpp ${GATT} LIBS Qt6::DBus ${MLITE})
+# R5 E-07: the phone's time zone with its time (Gadgetbridge's frames, a fake timedate1)
+btsyncd_test(timezone_test DCONF SOURCES ${SRC}/timeservice.cpp ${SRC}/settime.cpp ${GATT} LIBS Qt6::DBus ${MLITE})
 btsyncd_test(connectivity_test DCONF SOURCES ${SRC}/connectivityfeedback.cpp ${SRC}/wakehold.cpp
 	LIBS Qt6::DBus ${MLITE} ${KEEPALIVE})
 
@@ -197,6 +199,12 @@ btsyncd_test(tst_healthchanges QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}
 	${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
 # The profile and goals from the phone (M4 WO-11): parsing, who wins, the request characteristic, Gadgetbridge's frames
 btsyncd_test(tst_healthprofile QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${SRC}/healthprofile.cpp ${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
+# R5 E-19, E-20: the types temp (skin temperature) and dly (the days' totals), Gadgetbridge's frames
+btsyncd_test(tst_healthtypes QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
+	${SRC}/healthprofile.cpp ${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
+# R5 E-08: the syncs the watch starts (a fake relay, health.db events, sensorlogd's signal, Gadgetbridge's <synced>)
+btsyncd_test(tst_healthsync QTEST BUS SOURCES ${SRC}/healthservice.cpp ${SRC}/healthrecords.cpp ${SRC}/healthchanges.cpp
 	${SRC}/healthprofile.cpp ${GATT} ${FAKES} LIBS Qt6::DBus PkgConfig::SQLITE3)
 btsyncd_test(tst_notificationservice QTEST BUS SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
 btsyncd_test(tst_voiceservice QTEST BUS SOURCES ${SRC}/voiceservice.cpp ${SRC}/voicesource.cpp ${SRC}/voiceprotocol.cpp

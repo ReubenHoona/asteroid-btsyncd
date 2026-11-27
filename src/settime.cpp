@@ -20,7 +20,13 @@
 #include <QDBusInterface>
 #include <QDBusMessage>
 #include <QDebug>
+#include <QDBusVariant>
+#include <QRegularExpression>
+#include <QTimeZone>
 #include "settime.h"
+
+static const char TIMEDATE_SERVICE[] = "org.freedesktop.timedate1";
+static const char TIMEDATE_PATH[] = "/org/freedesktop/timedate1";
 
 bool setSystemTime(const QDateTime& dateTime) {
     QDBusInterface interface("org.freedesktop.timedate1",
@@ -68,5 +74,64 @@ bool setSystemTimeFromPhone(const QDateTime& dateTime)
     MDConfItem phoneSet(QString::fromLatin1(PhoneSetKey));
     if (!phoneSet.value(false).toBool())
         phoneSet.set(true);
+    return true;
+}
+
+QString systemTimeZoneName()
+{
+    QDBusMessage get = QDBusMessage::createMethodCall(QString::fromLatin1(TIMEDATE_SERVICE), QString::fromLatin1(TIMEDATE_PATH),
+                                                      QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
+    get << QString::fromLatin1(TIMEDATE_SERVICE) << QStringLiteral("Timezone");
+    const QDBusMessage reply = QDBusConnection::systemBus().call(get, QDBus::Block, 5000);
+    if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty())
+        return QString();
+    return reply.arguments().first().value<QDBusVariant>().variant().toString();
+}
+
+bool setSystemTimeZone(const QString &zone)
+{
+    QDBusMessage set = QDBusMessage::createMethodCall(QString::fromLatin1(TIMEDATE_SERVICE), QString::fromLatin1(TIMEDATE_PATH),
+                                                      QString::fromLatin1(TIMEDATE_SERVICE), QStringLiteral("SetTimezone"));
+    set << zone << false;   // not interactive
+    const QDBusMessage reply = QDBusConnection::systemBus().call(set, QDBus::Block, 5000);
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        qWarning("Failed to set the time zone: %s", reply.errorMessage().toLocal8Bit().constData());
+        return false;
+    }
+    return reply.type() == QDBusMessage::ReplyMessage;
+}
+
+QString zoneForPhone(const QString &zoneId, bool hasOffset, int offsetSecs)
+{
+    // an IANA name: letters, digits and _+-/ in parts, no "..", at most 64 characters
+    static const QRegularExpression name(QStringLiteral("^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$"));
+    if (!zoneId.isEmpty() && zoneId.size() <= 64 && name.match(zoneId).hasMatch()
+            && QTimeZone::isTimeZoneIdAvailable(zoneId.toLatin1()))
+        return zoneId;
+    // the Etc zones are whole hours, UTC-12 to UTC+14, their sign the other way round
+    if (hasOffset && offsetSecs % 3600 == 0 && offsetSecs >= -12 * 3600 && offsetSecs <= 14 * 3600) {
+        const int hours = offsetSecs / 3600;
+        const QString etc = hours == 0 ? QStringLiteral("Etc/GMT")
+                : QStringLiteral("Etc/GMT%1%2").arg(hours > 0 ? QLatin1Char('-') : QLatin1Char('+')).arg(qAbs(hours));
+        if (QTimeZone::isTimeZoneIdAvailable(etc.toLatin1()))
+            return etc;
+    }
+    return QString();
+}
+
+bool setSystemTimeZoneFromPhone(const QString &zone)
+{
+    if (zone.isEmpty())
+        return false;
+    if (!autoTimeZoneEnabled()) {
+        qInfo("Time zone from the phone not applied: Automatic time zone is off");
+        return false;
+    }
+    if (systemTimeZoneName() == zone)
+        return true;
+    if (!setSystemTimeZone(zone))
+        return false;
+    // no names in the log: the zone is where the phone is
+    qInfo("Time zone set from the phone");
     return true;
 }

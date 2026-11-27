@@ -21,7 +21,9 @@
 #include <QByteArray>
 #include <QObject>
 #include <QString>
+#include <QTimer>
 
+#include "healthchanges.h"
 #include "service.h"
 
 /*
@@ -62,14 +64,56 @@ private:
  * and a workout's track, <req><ty>wot</ty><id>ID</id><si>MS</si></req>.
  * The phone also writes the user's profile and goals there,
  * <prof>...</prof> (healthprofile.h), which has no answer.
+ *
+ * Syncs the watch starts (R5 E-08; stock's sync triggers, SyncRequest
+ * EventType WEAR_EXERCISE_UPLOAD_WORKOUT_DATA 7, WEAR_DAILY_SLEEP 11,
+ * WEAR_TODAY_APP_OPEN 17, WEAR_TODAY_SYNC_BUTTON 5): the phone is asked over
+ * the relay's act {"a":"hsync","ev":"wo|sl|today|button"} (assistantprotocol.h;
+ * only a phone that lists hsync gets it) and syncs as at a connection; at the
+ * end of every sync, whoever started it, the phone writes
+ *   <synced><ok>1|0</ok><n>RECORDS</n></synced>
+ * here (only to a watch whose capabilities have <takes>synced</takes>). The
+ * events: wo, a workout ended; sl, a main night was added (sensorlogd's
+ * HealthChanged signal, then two short reads of health.db); today, the Health
+ * app's Today list opened, and button, its Sync button (SyncRequestKey, a
+ * text the app writes, "today@MS" / "button@MS"). Nothing is asked while a
+ * watch-started sync waits for its end, and wo, sl and today not within a
+ * minute of the last sync's end. For the Today list's last row (stock's
+ * "Syncing", "Can't Sync Data", "Last synced", Sync / Retry): SyncStateKey
+ * is "syncing" from the ask to <synced>, "failed" when the phone refused,
+ * did not end it within SyncTimeoutMs (a timer that does not wake the system)
+ * or went, and when the button found no phone, else "idle"; SyncLastKey the
+ * watch's time of the last <synced> with ok 1 (epoch ms); SyncSupportedKey true
+ * once a phone sent <synced> (the row shows only then). Nothing here wakes the
+ * watch: every event is one it is awake for.
  */
 class HealthRequestChrc;
+class MDConfItem;
+class PhoneRelay;
 
 class HealthService : public Service
 {
     Q_OBJECT
 public:
     explicit HealthService(int index, QDBusConnection bus, QObject *parent = 0);
+
+    static constexpr const char *SyncRequestKey = "/org/asteroidos/health/sync/request";
+    static constexpr const char *SyncStateKey = "/org/asteroidos/health/sync/state";
+    static constexpr const char *SyncLastKey = "/org/asteroidos/health/sync/last-ms";
+    static constexpr const char *SyncSupportedKey = "/org/asteroidos/health/sync/supported";
+    // a watch-started sync that the phone has not ended by then failed
+    static const int SyncTimeoutMs = 180000;
+    // wo, sl and today wait this long after a sync's end
+    static const qint64 SyncQuietMs = 60000;
+
+    // The phone's relay (AssistantService), for the hsync act
+    void setPhoneRelay(PhoneRelay *relay) { mRelay = relay; }
+
+    // Asks the phone for a sync (wo, sl, today, button); false when nothing was asked
+    bool requestSync(const QString &event);
+
+    // The phone's <synced> message; false if it is not one
+    bool synced(const QByteArray &xml);
 
     // Answers after the write returns, so the phone sees its write
     // acknowledged before the data. seq: the sq of wo, sl, rhr; id: the
@@ -84,15 +128,29 @@ public:
 public slots:
     // The phone's link (NotificationService::phoneConnectedChanged)
     void phoneConnectedChanged(bool connected);
+    // asteroid-sensorlogd's HealthChanged(x seq): health.db changed
+    void healthChanged(qlonglong seq);
 
 private slots:
     void sendPending();
+    void onSyncRequest();
+    void onSyncTimeout();
 
 private:
+    void setSyncState(const char *state);
+
     HealthDataChrc *mData;
     HealthRequestChrc *mRequest;
     QByteArray mPending;
     int mPendingMtu = 23;
+    PhoneRelay *mRelay = nullptr;
+    MDConfItem *mSyncRequest;
+    MDConfItem *mSyncState;
+    MDConfItem *mSyncLast;
+    MDConfItem *mSyncSupported;
+    QTimer mSyncTimeout;
+    bool mSyncing = false;
+    HealthChanges::SyncMarks mMarks;
 };
 
 #endif // HEALTHSERVICE_H

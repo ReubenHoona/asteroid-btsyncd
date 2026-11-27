@@ -52,7 +52,10 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     // A screenshot the watch took goes to a phone that is there (BlueZ keeps its subscriptions over a disconnection)
     screenshots->content()->setPhoneCheck([notifications] { return notifications->phoneConnected(); });
     addService(screenshots);
-    addService(new TimeService(5, bus));
+    TimeService *time = new TimeService(5, bus);
+    addService(time);
+    // the phone's zone again when Automatic time zone is switched on while it is there (R5 E-07)
+    connect(notifications, &NotificationService::phoneConnectedChanged, time, &TimeService::phoneConnectedChanged);
     HealthService *health = new HealthService(6, bus);
     addService(health);
     connect(notifications, &NotificationService::phoneConnectedChanged, health, &HealthService::phoneConnectedChanged);
@@ -70,6 +73,8 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     AssistantService *assistant = new AssistantService(10, bus, notifications);
     addService(assistant);
     mAssistant = assistant;
+    // the syncs the watch starts go over the same relay (the act hsync, R5 E-08)
+    health->setPhoneRelay(assistant);
     // The call log for the Phone app's Recents (CR-08), from the phone's call cards
     notifications->setCallObserver(new CallLog(QString(), QDBusConnection::sessionBus(), this));
     // The phone's conversations for the messages app, over the same relay

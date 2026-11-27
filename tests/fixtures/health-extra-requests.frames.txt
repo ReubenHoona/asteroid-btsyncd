@@ -1,0 +1,2 @@
+<req><ty>temp</ty><si>0</si></req>
+<req><ty>dly</ty><sq>0</sq></req>
