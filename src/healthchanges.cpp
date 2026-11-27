@@ -546,4 +546,21 @@ QByteArray track(const QString &root, qint64 workoutId, qint64 sinceMs, int max,
     return xml + "</data>";
 }
 
+SyncMarks syncMarks(const QString &root)
+{
+    SyncMarks marks;
+    Db db(root);
+    if (!db.exists() || !db.db())
+        return marks;
+    // the primary key and the wake date index: two short reads
+    Stmt w(db.db(), "SELECT MAX(id) FROM workout WHERE end_ms IS NOT NULL AND deleted = 0");
+    if (w.row() && !w.null(0))
+        marks.workoutId = w.i(0);
+    Stmt s(db.db(), "SELECT MAX(wake_date) FROM sleep_session WHERE main = 1 AND deleted = 0");
+    if (s.row() && !s.null(0))
+        marks.wakeDate = QString::fromUtf8(s.text(0));
+    marks.valid = !w.failed() && !s.failed();
+    return marks;
+}
+
 }

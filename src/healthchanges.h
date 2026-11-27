@@ -83,6 +83,20 @@ QByteArray changes(const QString &root, Kind kind, qint64 sinceSeq, int max = Ma
 QByteArray track(const QString &root, qint64 workoutId, qint64 sinceMs, int max = MaxRecords,
                  int maxBytes = MaxAnswerBytes);
 
+/*
+ * What a watch-started sync looks for (R5 E-08, healthservice.h): the newest
+ * workout that has ended and the newest main night, as health.db has them now.
+ * A later read with a higher workout id or a later wake date is a workout
+ * that ended or a night that was added since (a night estimated again keeps
+ * its wake date). valid: the database was read (there is none yet: false).
+ */
+struct SyncMarks {
+    bool valid = false;
+    qint64 workoutId = 0;
+    QString wakeDate;
+};
+SyncMarks syncMarks(const QString &root);
+
 }
 
 #endif // HEALTHCHANGES_H

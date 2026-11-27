@@ -384,7 +384,7 @@ private slots:
     void capabilitiesFixture()
     {
         const QByteArray caps = mCaps->ReadValue({});
-        QVERIFY(caps.contains("<takes>prof</takes>"));
+        QVERIFY(caps.contains("<takes>prof,synced</takes>"));
         if (qEnvironmentVariableIntValue("FIXTURES_WRITE") == 1) {
             QFile f(QStringLiteral(FIXTURE_DIR "/health-capabilities.frames.txt"));
             QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));

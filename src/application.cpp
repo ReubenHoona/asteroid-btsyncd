@@ -73,6 +73,8 @@ Application::Application(QDBusConnection bus, QObject *parent) : QObject(parent)
     AssistantService *assistant = new AssistantService(10, bus, notifications);
     addService(assistant);
     mAssistant = assistant;
+    // the syncs the watch starts go over the same relay (the act hsync, R5 E-08)
+    health->setPhoneRelay(assistant);
     // The call log for the Phone app's Recents (CR-08), from the phone's call cards
     notifications->setCallObserver(new CallLog(QString(), QDBusConnection::sessionBus(), this));
     // The phone's conversations for the messages app, over the same relay
