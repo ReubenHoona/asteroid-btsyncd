@@ -217,5 +217,28 @@ btsyncd_test(tst_relay QTEST BUS SOURCES ${SRC}/assistantservice.cpp ${SRC}/assi
 btsyncd_test(tst_calls QTEST BUS SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
 # The phone's <insert> element by element (versions 4, 5, CR-52) and Gadgetbridge's inserts; no bus
 btsyncd_test(tst_notifparse QTEST SOURCES ${NOTIF} ${FAKES} LIBS Qt6::DBus)
+# R6 K-05: the daemon's language (src/languagefollower.*, the shared catalogue rule src/eoscatalogues.h) on invented
+# catalogues (tests/i18n) and the daemon's German and en_GB ones, made with Qt's lrelease (Qt6LinguistTools; without
+# it the catalogue cases are skipped); a real PropertiesChanged on the private system bus
+btsyncd_test(tst_language QTEST BUS SOURCES ${SRC}/languagefollower.cpp ${SRC}/languagefollower.h ${SRC}/eoscatalogues.h
+	${FAKES} LIBS Qt6::DBus)
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS LinguistTools)
+if(TARGET Qt6::lrelease)
+	set(qmdir ${CMAKE_CURRENT_BINARY_DIR}/i18n)
+	file(MAKE_DIRECTORY ${qmdir})
+	set(qms "")
+	foreach(ts ${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-bt.en.ts ${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-bt.de_DE.ts
+			${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-bt.en_GB.ts ${CMAKE_CURRENT_SOURCE_DIR}/../i18n/asteroid-btsyncd.de.ts
+			${CMAKE_CURRENT_SOURCE_DIR}/../i18n/asteroid-btsyncd.en_GB.ts)
+		get_filename_component(file ${ts} NAME)
+		string(REGEX REPLACE "\\.ts$" ".qm" qm "${file}")
+		add_custom_command(OUTPUT ${qmdir}/${qm} COMMAND Qt6::lrelease -silent ${ts} -qm ${qmdir}/${qm} DEPENDS ${ts}
+			VERBATIM)
+		list(APPEND qms ${qmdir}/${qm})
+	endforeach()
+	add_custom_target(tst_language_catalogues DEPENDS ${qms})
+	add_dependencies(tst_language tst_language_catalogues)
+	target_compile_definitions(tst_language PRIVATE TST_I18N_DIR="${qmdir}")
+endif()
 btsyncd_test(tst_bluezmanager QTEST BUS SOURCES ${SRC}/bluezmanager.cpp ${SRC}/advertisement.cpp ${SRC}/ancs.cpp
 	${SRC}/ancs_notification.cpp ${SRC}/cts.cpp ${SRC}/settime.cpp ${FAKES} LIBS Qt6::DBus)

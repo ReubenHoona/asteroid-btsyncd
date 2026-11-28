@@ -30,6 +30,7 @@ set(
 	voiceservice.cpp
 	voicesource.cpp
 	wakehold.cpp
+	languagefollower.cpp
 	phonestatusservice.cpp
 	assistantprotocol.cpp
 	assistantservice.cpp
@@ -74,6 +75,8 @@ set(
 	voiceservice.h
 	voicesource.h
 	wakehold.h
+	languagefollower.h
+	eoscatalogues.h
 	messagejoiner.h
 	phonestatusservice.h
 	assistantprotocol.h

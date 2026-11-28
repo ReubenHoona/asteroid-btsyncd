@@ -28,14 +28,17 @@
 #include "contactnames.h"
 #include "callaudio.h"
 #include "connectivityfeedback.h"
+#include "languagefollower.h"
 
 int main(int argc, char **argv)
 {
     QCoreApplication qcoreapp(argc, argv);
 
-    QTranslator translator;
-    if (translator.load(QLocale(), "asteroid-btsyncd", ".", "/usr/share/translations", ".qm"))
-        qcoreapp.installTranslator(&translator);
+    // the daemon's texts in the watch's language (R6 K-05): the English catalogue, then the locale's as every
+    // program of the image chooses it (en_NZ: en_GB's, de_AT: de_DE's); a language chosen while it runs is followed
+    LanguageFollower language(QStringLiteral("asteroid-btsyncd"), QStringLiteral("/usr/share/translations"));
+    language.install();
+    language.watch(QDBusConnection::systemBus());
 
     if (!QDBusConnection::systemBus().isConnected()) {
         fprintf(stderr, "Cannot connect to the D-Bus system bus.\n");
