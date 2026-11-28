@@ -8,6 +8,7 @@
  *   - an update replaces an event, <del> removes one
  *   - a full sync (<sync>begin/end</sync>) removes what the phone did not send
  *   - bad elements are ignored and do not break what follows
+ *   - <gs> keeps an event's guests (X-EOS-GUESTS), the next <ev> clears them
  */
 
 #include "calendarservice.h"
@@ -19,6 +20,9 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QElapsedTimer>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTimeZone>
 #include <cstdio>
@@ -370,6 +374,52 @@ int main(int argc, char **argv)
         spin(600);
         events = readBack();
         CHECK(events.size() == 1 && events.contains(uid("201")) && events.value(uid("201"))->summary() == "Kept again");
+    }
+
+    // Guests (R5 D-08/D-16): a <gs> after its <ev> keeps them as X-EOS-GUESTS (the compact JSON,
+    // percent-encoded); bad JSON, n = 0 and an unknown event change nothing; a <gs> split over two
+    // writes is joined; an <ev> without a <gs> clears them
+    {
+        auto guests = [](const char *id) {
+            const KCalendarCore::Event::Ptr e = readBack().value(uid(id));
+            return e ? e->nonKDECustomProperty("X-EOS-GUESTS") : QStringLiteral("<no event>");
+        };
+        auto decoded = [](const QString &v) { return QJsonDocument::fromJson(QByteArray::fromPercentEncoding(v.toLatin1())).object(); };
+        const QByteArray ev = "<ev><id>301</id><ti>Review</ti><st>" + QByteArray::number(t0) + "</st></ev>";
+        write(driver, ev);
+        write(driver, "<gs><id>301</id><js>{\"n\": 3, \"c\": [1,0,1,1], \"x\": 0, \"h\": \"o\", "
+                      "\"g\": [[\"Ana &amp; Bo\",1,1],[\"Zo\xc3\xab\",0,2],[\"Cy\",3,0]]}</js></gs>");
+        spin(1200);
+        const QString v1 = guests("301");
+        CHECK(!v1.isEmpty() && !v1.contains('"') && !v1.contains('{') && !v1.contains(' '));
+        QJsonObject o = decoded(v1);
+        CHECK(o.value("n").toInt() == 3 && o.value("h").toString() == "o" && o.value("x").toInt() == 0);
+        CHECK(o.value("g").toArray().size() == 3);
+        CHECK(o.value("g").toArray().at(0).toArray().at(0).toString() == "Ana & Bo");
+        CHECK(o.value("g").toArray().at(1).toArray().at(0).toString() == QString::fromUtf8("Zo\xc3\xab"));
+        CHECK(o.value("c").toArray().at(3).toInt() == 1);
+        // ignored: bad JSON, no guests, not an object, no id, an event the watch does not have
+        write(driver, "<gs><id>301</id><js>{not json</js></gs>");
+        write(driver, "<gs><id>301</id><js>{\"n\":0}</js></gs>");
+        write(driver, "<gs><id>301</id><js>[1,2]</js></gs>");
+        write(driver, "<gs><js>{\"n\":1}</js></gs>");
+        write(driver, "<gs><id>999</id><js>{\"n\":1}</js></gs>");
+        spin(1200);
+        CHECK(guests("301") == v1);
+        CHECK(!readBack().contains(uid("999")));
+        // split over two writes, then a later event in the same frame still arrives
+        write(driver, "<gs><id>301</id><js>{\"n\":1,\"c\":[0,0,0,1],");
+        write(driver, "\"g\":[[\"Dee\",0,1]]}</js></gs><ev><id>302</id><ti>After</ti><st>"
+                      + QByteArray::number(t0 + 60) + "</st></ev>");
+        spin(1200);
+        o = decoded(guests("301"));
+        CHECK(o.value("n").toInt() == 1 && o.value("g").toArray().at(0).toArray().at(0).toString() == "Dee");
+        CHECK(guests("302").isEmpty());
+        // the phone sends the event again without guests: they are gone
+        write(driver, ev);
+        spin(1200);
+        CHECK(guests("301").isEmpty());
+        CHECK(readBack().value(uid("301")) && readBack().value(uid("301"))->summary() == "Review");
     }
 
     // Clear

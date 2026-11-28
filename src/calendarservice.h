@@ -56,6 +56,14 @@ class CalendarStore;
  *   watch schedules them, so they add no notification and no wake). A
  *   property the phone no longer sends is removed from the event.
  *   <del><id>ID</id></del>      removes event ID
+ *   <gs><id>ID</id><js>JSON</js></gs>
+ *     (R5 D-08/D-16, Gadgetbridge since R5-apps-b) right after the <ev> of event ID when it has
+ *     guests: {"n":5,"c":[yes,maybe,no,awaiting],"x":1,"h":"o"|"t","g":[["Name",0..3,flags]]}
+ *     (flags 1 organizer, 2 the user; at most 512 bytes from the phone). Kept on the event as
+ *     X-EOS-GUESTS, the compact JSON percent-encoded (the Calendar app's CalendarLogic.parseGuests
+ *     reads it). An <ev> clears it, so guests the phone no longer sends go. A <gs> for an event the
+ *     watch does not have, or whose JSON is not an object with n > 0, is ignored. An older btsyncd
+ *     logs "unknown element" and goes on
  *   <sync>begin</sync> ... <sync>end</sync>
  *     a full sync: at the end, the phone's events not sent since the begin
  *     are removed
@@ -95,6 +103,9 @@ public:
     static QString normalizeColor(const QString &text);
     // "10,30,x,-5,10" -> (10, 30): whole minutes 0..40320, no repeats, at most five
     static QList<int> parseReminders(const QString &text);
+    // Parses <gs>...</gs> into the event id and the X-EOS-GUESTS value; false if it has no id or
+    // its JSON is not an object with n > 0
+    static bool parseGuests(const QByteArray &xml, QString *id, QString *value);
 
     // The custom properties on an event (the calendar app reads these)
     static constexpr const char *PropColor = "X-EOS-COLOR";
@@ -102,6 +113,8 @@ public:
     static constexpr const char *PropOrganizer = "X-EOS-ORGANIZER";
     static constexpr const char *PropCalendar = "X-EOS-CALENDAR";
     static constexpr const char *PropEventId = "X-EOS-EVENTID";
+    static constexpr const char *PropGuests = "X-EOS-GUESTS";
+    static const int MaxGuestsJson = 4096;
     static const int MaxReminders = 5;
     static const int MaxReminderMinutes = 40320;
 

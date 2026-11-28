@@ -21,6 +21,10 @@
 #include "wakehold.h"
 
 #include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QUrl>
 #include <QTimer>
 #include <QTimeZone>
 #include <QXmlStreamReader>
@@ -129,6 +133,8 @@ public:
         setOrRemove(ev, CalendarService::PropOrganizer, e.organizer);
         setOrRemove(ev, CalendarService::PropCalendar, e.calendar);
         setOrRemove(ev, CalendarService::PropEventId, e.eventId.isEmpty() ? e.id : e.eventId);
+        // the guests come in their own <gs> after this <ev> (none: the event has none now)
+        setOrRemove(ev, CalendarService::PropGuests, QString());
         // The reminders: display alarms before the start, never enabled
         ev->clearAlarms();
         for(int minutes : e.reminders) {
@@ -161,6 +167,20 @@ public:
         } else {
             ev->endUpdates();
         }
+    }
+
+    // false if there is no such event
+    bool setGuests(const QString &id, const QString &value)
+    {
+        if(!open())
+            return false;
+        KCalendarCore::Event::Ptr ev = mCal->event(uidFor(id));
+        if(!ev)
+            return false;
+        ev->startUpdates();
+        setOrRemove(ev, CalendarService::PropGuests, value);
+        ev->endUpdates();
+        return true;
     }
 
     // false if there is no such event
@@ -216,7 +236,7 @@ public:
       : Characteristic(bus, index, CAL_EVENTS_UUID, {"encrypt-authenticated-write"}, service, service), mService(service),
         // every complete element: <name>...</name> or <name/>; one that begins (at offset 0) while
         // another is incomplete means the rest of that one was lost
-        mJoiner("Calendar", {"sync", "ev", "del", "clear", "un"}, MaxPending) {}
+        mJoiner("Calendar", {"sync", "ev", "gs", "del", "clear", "un"}, MaxPending) {}
 
     // The phone is gone: an element cut by the disconnection never ends, and the next sync of the
     // phone begins with <sync>begin</sync> (it was taken for the rest of the cut element)
@@ -353,6 +373,27 @@ bool CalendarService::parseEvent(const QByteArray &xml, CalendarEventData *event
     return !event->id.isEmpty() && event->start.isValid();
 }
 
+bool CalendarService::parseGuests(const QByteArray &xml, QString *id, QString *value)
+{
+    QXmlStreamReader reader(xml);
+    if(!reader.readNextStartElement() || reader.name() != QLatin1String("gs"))
+        return false;
+    QString js;
+    while(reader.readNextStartElement()) {
+        if(reader.name() == QLatin1String("id")) *id = reader.readElementText().trimmed();
+        else if(reader.name() == QLatin1String("js")) js = reader.readElementText();
+        else reader.skipCurrentElement();
+    }
+    if(reader.hasError() || id->isEmpty() || js.isEmpty() || js.size() > MaxGuestsJson)
+        return false;
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(js.toUtf8(), &err);
+    if(err.error != QJsonParseError::NoError || !doc.isObject() || doc.object().value(QStringLiteral("n")).toInt() <= 0)
+        return false;
+    *value = QString::fromLatin1(QUrl::toPercentEncoding(QString::fromUtf8(doc.toJson(QJsonDocument::Compact))));
+    return true;
+}
+
 void CalendarService::handleElement(const QByteArray &xml)
 {
     // the <un> of an end frame follows its <sync>end</sync> directly; anything else in between
@@ -394,6 +435,16 @@ void CalendarService::handleElement(const QByteArray &xml)
         if(mSyncing)
             mSynced.insert(event.id);
         scheduleSave();
+    } else if(xml.startsWith("<gs>")) {
+        QString id, value;
+        if(!parseGuests(xml, &id, &value)) {
+            qWarning() << "Calendar: guests without an event id or with bad JSON, ignored";
+            return;
+        }
+        if(mStore->setGuests(id, value))
+            scheduleSave();
+        else
+            qWarning() << "Calendar: guests for an event the watch does not have, ignored";
     } else if(xml.startsWith("<del>")) {
         QXmlStreamReader reader(xml);
         QString id;
