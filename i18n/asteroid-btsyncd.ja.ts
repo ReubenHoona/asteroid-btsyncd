@@ -14,4 +14,43 @@
         <translation>切断しました</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>スマートフォン</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>返信</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>スマートフォンで開く</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>応答</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>同意しない</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>通話を終了</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>電話</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>着信音を停止</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>スマートフォンとの接続が切断されました</translation>
+    </message>
+</context>
 </TS>

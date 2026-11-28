@@ -14,4 +14,43 @@
         <translation>ຕັດເຊື່ອມຕໍ່</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>ໂທລະສັບ</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>ຕອບກັບ</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>ເປີດຢູ່ໂທລະສັບ</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>ຮັບສາຍ</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>ປະຕິເສດ</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>ວາງສາຍ</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>ໂທ</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>ຢຸດສຽງ</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>ຕັດການເຊື່ອມຕໍ່ໂທລະສັບແລ້ວ</translation>
+    </message>
+</context>
 </TS>

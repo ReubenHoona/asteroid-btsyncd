@@ -14,4 +14,43 @@
         <translation>Diputuskan</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Telefon</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Balas</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Buka pada telefon</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Jawab</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Tolak</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Tamatkan panggilan</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Panggil</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Hentikan bunyi</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Telefon diputuskan sambungan</translation>
+    </message>
+</context>
 </TS>

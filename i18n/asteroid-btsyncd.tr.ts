@@ -14,4 +14,43 @@
         <translation>Bağlı değil</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Telefon</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Yanıtla</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Telefonda aç</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Yanıtla</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Reddet</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Aramayı sonlandır</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Telefon et</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Sesi durdur</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Telefon bağlı değil</translation>
+    </message>
+</context>
 </TS>

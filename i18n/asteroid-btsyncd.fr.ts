@@ -14,4 +14,43 @@
         <translation>Déconnecté</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Téléphone</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Répondre</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Ouvrir sur le téléphone</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Répondre</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Refuser</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Raccrocher</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Appeler</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Arrêter le son</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Téléphone déconnecté</translation>
+    </message>
+</context>
 </TS>

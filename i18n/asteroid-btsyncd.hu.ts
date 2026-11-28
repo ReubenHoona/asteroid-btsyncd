@@ -14,4 +14,43 @@
         <translation>Szétkapcsolva</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Telefon</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Válasz</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Megnyitás telefonon</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Fogadás</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Elutasítás</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Hívás befejezése</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Hívás</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Hang leállítása</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Telefon leválasztva</translation>
+    </message>
+</context>
 </TS>

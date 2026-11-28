@@ -14,4 +14,43 @@
         <translation>Verbinding verbroken</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Telefoon</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Beantwoorden</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Openen op telefoon</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Beantwoorden</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Weigeren</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Gesprek beëindigen</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Bellen</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Geluid stoppen</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Telefoon ontkoppeld</translation>
+    </message>
+</context>
 </TS>

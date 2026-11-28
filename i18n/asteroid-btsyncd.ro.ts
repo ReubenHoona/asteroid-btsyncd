@@ -14,4 +14,43 @@
         <translation>Deconectat</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Telefon</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Răspunde</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Deschide pe telefon</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Răspunde</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Refuz</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Încheie apelul</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Apelează</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Oprește sunetul</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Telefon deconectat</translation>
+    </message>
+</context>
 </TS>

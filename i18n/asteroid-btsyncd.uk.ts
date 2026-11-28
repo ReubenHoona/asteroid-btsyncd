@@ -14,4 +14,43 @@
         <translation>Відключено</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Телефон</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Відповісти</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Відкрити на телефоні</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Відповісти</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Відхилити</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Завершити виклик</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Зателефонувати</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Вимкнути сигнал</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Телефон відключено</translation>
+    </message>
+</context>
 </TS>

@@ -14,4 +14,43 @@
         <translation>Ei yhteyttä</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Puhelin</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Vastaa</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Avaa puhelimessa</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Vastaa</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Hylkää</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Lopeta puhelu</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Soitto</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Pysäytä toisto</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Ei yhteyttä puhelimeen</translation>
+    </message>
+</context>
 </TS>

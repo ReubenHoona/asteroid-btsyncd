@@ -14,4 +14,43 @@
         <translation>Отсоединен</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Телефон</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Ответить</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Открыть на телефоне</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Ответить</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Отклонить</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Завершить вызов</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Позвонить</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Остановить</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Отключено от телефона</translation>
+    </message>
+</context>
 </TS>

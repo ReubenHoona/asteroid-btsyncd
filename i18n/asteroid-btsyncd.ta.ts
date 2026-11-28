@@ -14,4 +14,43 @@
         <translation>துண்டிக்கப்பட்டது</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>மொபைல்</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>பதிலளி</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>மொபைலில் திற</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>பதிலளி</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>நிராகரி</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>அழைப்பைத் துண்டி</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>அழை</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>ஒலியை நிறுத்து</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>மொபைல் துண்டிக்கப்பட்டது</translation>
+    </message>
+</context>
 </TS>

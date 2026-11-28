@@ -14,4 +14,43 @@
         <translation>מנותק</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>טלפון</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>תשובה</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>פתיחה בטלפון</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>מענה</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>דחייה</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>סיום השיחה</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>שיחה</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>הפסק את הצלצול</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>מנותק מהטלפון</translation>
+    </message>
+</context>
 </TS>

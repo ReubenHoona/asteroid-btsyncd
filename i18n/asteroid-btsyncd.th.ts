@@ -14,4 +14,43 @@
         <translation>เลิกเชื่อมต่อ</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>โทรศัพท์</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>ตอบ</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>เปิดในโทรศัพท์</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>รับสาย</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>ปฏิเสธ</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>วางสาย</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>โทร</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>หยุดเสียง</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>ไม่ได้เชื่อมต่อกับโทรศัพท์</translation>
+    </message>
+</context>
 </TS>

@@ -14,4 +14,43 @@
         <translation>გათიშული</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>ტელეფონი</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>პასუხი</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>ტელეფონში გახსნა</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>პასუხი</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>უარყოფა</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>ზარის დასრულება</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>ზარი</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>ხმის შეწყვეტა</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>ტელეფონთან კავშირი გაწყდა</translation>
+    </message>
+</context>
 </TS>

@@ -14,4 +14,43 @@
         <translation>Odpojené</translation>
     </message>
 </context>
+<context>
+    <name>QObject</name>
+    <message>
+        <source>Phone</source>
+        <translation>Telefón</translation>
+    </message>
+    <message>
+        <source>Reply</source>
+        <translation>Odpovedať</translation>
+    </message>
+    <message>
+        <source>Open on phone</source>
+        <translation>Otvoriť v telefóne</translation>
+    </message>
+    <message>
+        <source>Answer</source>
+        <translation>Prijať</translation>
+    </message>
+    <message>
+        <source>Decline</source>
+        <translation>Odmietnuť</translation>
+    </message>
+    <message>
+        <source>End call</source>
+        <translation>Ukončiť hovor</translation>
+    </message>
+    <message>
+        <source>Call</source>
+        <translation>Volať</translation>
+    </message>
+    <message>
+        <source>Stop sound</source>
+        <translation>Zastaviť zvuk</translation>
+    </message>
+    <message>
+        <source>Phone disconnected</source>
+        <translation>Telefón je odpojený</translation>
+    </message>
+</context>
 </TS>
